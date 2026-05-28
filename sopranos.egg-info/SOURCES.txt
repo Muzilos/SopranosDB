@@ -1,0 +1,16 @@
+pyproject.toml
+sopranos/__init__.py
+sopranos/config.py
+sopranos.egg-info/PKG-INFO
+sopranos.egg-info/SOURCES.txt
+sopranos.egg-info/dependency_links.txt
+sopranos.egg-info/entry_points.txt
+sopranos.egg-info/requires.txt
+sopranos.egg-info/top_level.txt
+sopranos/db/__init__.py
+sopranos/pipeline/__init__.py
+sopranos/query/__init__.py
+sopranos/utils/__init__.py
+sopranos/utils/episode_paths.py
+sopranos/utils/hashing.py
+sopranos/utils/timestamps.py

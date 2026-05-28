@@ -1,0 +1,289 @@
+{
+  "tony_soprano": {
+    "canonical_name": "Tony Soprano",
+    "aliases": ["Tony", "T", "Anthony Soprano", "Anthony Soprano Sr.", "the boss", "Ton'"],
+    "description": "Lead. James Gandolfini. Italian-American man late 30s through late 40s. Heavy build, broad shoulders, dark hair receding to balding (mostly bald by S5-S6). Often in bowling shirts, polo shirts, or a bathrobe at home; suits when working. Acting/full boss of the DiMeo crime family.",
+    "first_seen": "S01E01"
+  },
+  "carmela_soprano": {
+    "canonical_name": "Carmela Soprano",
+    "aliases": ["Carmela", "Carm", "Carmela DeAngelis"],
+    "description": "Edie Falco. Tony's wife. Italian-American woman late 30s/40s. Blonde shoulder-length hair (often styled, sometimes longer with extensions), gold jewelry including a large crucifix necklace, French-manicured nails. Devout Catholic homemaker. Tall.",
+    "first_seen": "S01E01"
+  },
+  "meadow_soprano": {
+    "canonical_name": "Meadow Soprano",
+    "aliases": ["Meadow", "Mead"],
+    "description": "Jamie-Lynn Sigler. Tony and Carmela's daughter. Long dark hair, slim build, late-teens in S1 progressing through college and beyond by S6. Smart, opinionated.",
+    "first_seen": "S01E01"
+  },
+  "aj_soprano": {
+    "canonical_name": "A.J. Soprano",
+    "aliases": ["A.J.", "AJ", "Anthony Jr.", "Anthony Junior"],
+    "description": "Robert Iler. Tony and Carmela's son. Round face, dark hair, chubby pre-teen in S1; grows into a depressed-looking teenager with longer dark hair by S5-S6.",
+    "first_seen": "S01E01"
+  },
+  "livia_soprano": {
+    "canonical_name": "Livia Soprano",
+    "aliases": ["Livia", "Ma", "Mom"],
+    "description": "Nancy Marchand. Tony's elderly, embittered mother. Gray-white hair, large glasses, frail elderly Italian-American woman usually in a housecoat or in a nursing-home room.",
+    "first_seen": "S01E01",
+    "deceased_after": "S03E01"
+  },
+  "junior_soprano": {
+    "canonical_name": "Junior Soprano",
+    "aliases": ["Uncle Junior", "Junior", "Corrado Soprano Jr.", "Corrado"],
+    "description": "Dominic Chianese. Tony's elderly uncle. Wiry build, gray-white hair, large square aviator-style glasses, often in cardigans and sport coats. In S6 he's confused, in a hospital gown or halo brace.",
+    "first_seen": "S01E01"
+  },
+  "christopher_moltisanti": {
+    "canonical_name": "Christopher Moltisanti",
+    "aliases": ["Christopher", "Chris", "Chrissy"],
+    "description": "Michael Imperioli. Tony's young protege and nephew-by-marriage. Italian-American man mid-20s in S1 aging through 30s. Slim, dark hair often slicked back, frequently in leather jackets and gold chains. Volatile, ambitious. Drug-using; appears gaunt at times.",
+    "first_seen": "S01E01"
+  },
+  "paulie_walnuts": {
+    "canonical_name": "Paulie Gualtieri",
+    "aliases": ["Paulie Walnuts", "Paulie", "Peter Paul Gualtieri"],
+    "description": "Tony Sirico. Tony's soldier and captain. Italian-American man 50s/60s. UNMISTAKABLE silver-and-black hair with distinct gray wings at the temples, slicked back. Dresses sharp in tracksuits or button-downs. Wiry, fastidious, superstitious.",
+    "first_seen": "S01E01"
+  },
+  "silvio_dante": {
+    "canonical_name": "Silvio Dante",
+    "aliases": ["Silvio", "Sil"],
+    "description": "Steven Van Zandt. Tony's consigliere. Italian-American man 50s. UNMISTAKABLE helmet-like jet-black pompadour hair. Owns the Bada Bing strip club. Soft-spoken, usually in dark suits or leisure shirts.",
+    "first_seen": "S01E01"
+  },
+  "big_pussy": {
+    "canonical_name": "Salvatore 'Big Pussy' Bonpensiero",
+    "aliases": ["Pussy", "Big Pussy", "Sal", "Sally"],
+    "description": "Vincent Pastore. Tony's soldier and close friend. Heavy-set Italian-American man 40s/50s, large stomach, brown hair, usually in casual button-downs. Becomes an FBI informant in S1-S2.",
+    "first_seen": "S01E01",
+    "deceased_after": "S02E13"
+  },
+  "hesh_rabkin": {
+    "canonical_name": "Hesh Rabkin",
+    "aliases": ["Hesh", "Herman Rabkin"],
+    "description": "Jerry Adler. Older Jewish man, friend and financial advisor to Tony. Bearded, often in casual sweaters or button-downs. Lives on a horse farm.",
+    "first_seen": "S01E01"
+  },
+  "artie_bucco": {
+    "canonical_name": "Artie Bucco",
+    "aliases": ["Artie", "Arthur Bucco"],
+    "description": "John Ventimiglia. Tony's lifelong friend, owner of Vesuvio (then Nuovo Vesuvio) restaurant. Italian-American man 40s, dark hair, often in chef's whites or casual shirts.",
+    "first_seen": "S01E01"
+  },
+  "charmaine_bucco": {
+    "canonical_name": "Charmaine Bucco",
+    "aliases": ["Charmaine"],
+    "description": "Katherine Narducci. Artie's wife. Italian-American woman 40s, dark hair pulled back, often disapproving demeanor toward the mob life.",
+    "first_seen": "S01E01"
+  },
+  "dr_melfi": {
+    "canonical_name": "Dr. Jennifer Melfi",
+    "aliases": ["Dr. Melfi", "Jennifer", "Jennifer Melfi"],
+    "description": "Lorraine Bracco. Tony's psychiatrist. Italian-American woman 40s. Shoulder-length brown hair, professional skirt suits, usually in her therapy office in a leather chair.",
+    "first_seen": "S01E01"
+  },
+  "father_phil": {
+    "canonical_name": "Father Phil Intintola",
+    "aliases": ["Father Phil", "Phil Intintola"],
+    "description": "Paul Schulze. Catholic priest, close to Carmela. Young-ish dark-haired man in clerical collar and black shirt.",
+    "first_seen": "S01E05"
+  },
+  "mikey_palmice": {
+    "canonical_name": "Mikey Palmice",
+    "aliases": ["Mikey", "Michael Palmice"],
+    "description": "Al Sapienza. Junior Soprano's right-hand man and underboss in S1. Italian-American man 30s/40s, dark curly hair, hot-tempered.",
+    "first_seen": "S01E01",
+    "deceased_after": "S01E13"
+  },
+  "jackie_aprile_sr": {
+    "canonical_name": "Jackie Aprile Sr.",
+    "aliases": ["Jackie", "Jackie Aprile"],
+    "description": "Michael Rispoli. Acting boss of the DiMeo family at start of S1, dying of cancer. Older Italian-American man, usually bedridden in hospital.",
+    "first_seen": "S01E01",
+    "deceased_after": "S01E04"
+  },
+  "brendan_filone": {
+    "canonical_name": "Brendan Filone",
+    "aliases": ["Brendan"],
+    "description": "Anthony DeSando. Young associate of Christopher's, drug user. Wiry build, long dark hair, often in leather jacket.",
+    "first_seen": "S01E01",
+    "deceased_after": "S01E03"
+  },
+  "georgie": {
+    "canonical_name": "Georgie",
+    "aliases": ["Georgie Santorelli"],
+    "description": "Bartender at the Bada Bing. Heavy-set bald man, often behind the bar.",
+    "first_seen": "S01E01"
+  },
+  "irina_peltsin": {
+    "canonical_name": "Irina Peltsin",
+    "aliases": ["Irina"],
+    "description": "Oksana Babiy. Tony's young Russian mistress in S1-S2. Long dark hair, Eastern European accent, often in lingerie or casual clothes.",
+    "first_seen": "S01E01"
+  },
+  "richie_aprile": {
+    "canonical_name": "Richie Aprile",
+    "aliases": ["Richie"],
+    "description": "David Proval. Jackie Aprile Sr.'s older brother, fresh out of prison in S2. Wiry Italian-American man 50s, mustache, slicked-back graying hair, often in leather jacket. Tense, dangerous.",
+    "first_seen": "S02E01",
+    "deceased_after": "S02E12"
+  },
+  "janice_soprano": {
+    "canonical_name": "Janice Soprano",
+    "aliases": ["Janice", "Parvati"],
+    "description": "Aida Turturro. Tony's older sister. Italian-American woman 40s/50s, long dark hair, sometimes with hippie/new-age styling (\"Parvati\"). Heavy build. Manipulative, sharp-tongued.",
+    "first_seen": "S02E01"
+  },
+  "furio_giunta": {
+    "canonical_name": "Furio Giunta",
+    "aliases": ["Furio"],
+    "description": "Federico Castelluccio. Italian-born soldier who joins Tony's crew from Naples. UNMISTAKABLE long red-blond ponytail, beard, tall, broad. Italian accent. Wears flashy Italian suits.",
+    "first_seen": "S02E04"
+  },
+  "adriana_la_cerva": {
+    "canonical_name": "Adriana La Cerva",
+    "aliases": ["Adriana", "Ade"],
+    "description": "Drea de Matteo. Christopher's girlfriend/fiancee. Italian-American woman 20s/30s with long curly auburn hair, heavy makeup, flashy revealing clothes. Becomes FBI informant.",
+    "first_seen": "S01E02",
+    "deceased_after": "S05E12"
+  },
+  "jackie_aprile_jr": {
+    "canonical_name": "Jackie Aprile Jr.",
+    "aliases": ["Jackie Jr.", "Jackie Junior"],
+    "description": "Jason Cerbone. Jackie Aprile Sr.'s son. Young dark-haired Italian-American man early 20s. Meadow's boyfriend for a stretch in S3.",
+    "first_seen": "S02E01",
+    "deceased_after": "S03E12"
+  },
+  "ralph_cifaretto": {
+    "canonical_name": "Ralph Cifaretto",
+    "aliases": ["Ralphie", "Ralph"],
+    "description": "Joe Pantoliano. Mob captain who arrives in S3. UNMISTAKABLE shaved head with prominent forehead, often sneering or with a mean smile, sharp suits or leather jackets. Volatile, sadistic.",
+    "first_seen": "S03E03",
+    "deceased_after": "S04E09"
+  },
+  "gloria_trillo": {
+    "canonical_name": "Gloria Trillo",
+    "aliases": ["Gloria"],
+    "description": "Annabella Sciorra. Tony's S3 mistress, a Mercedes saleswoman. Italian-American woman 30s with short dark hair, professional attire, fiery temperament.",
+    "first_seen": "S03E08",
+    "deceased_after": "S03E13"
+  },
+  "noah_tannenbaum": {
+    "canonical_name": "Noah Tannenbaum",
+    "aliases": ["Noah"],
+    "description": "Patrick Tully. Meadow's first college boyfriend (S3). Young mixed-race man, slender, college-age.",
+    "first_seen": "S03E01"
+  },
+  "bobby_baccalieri": {
+    "canonical_name": "Bobby Baccalieri",
+    "aliases": ["Bobby", "Bobby Bacala", "Bobby Jr."],
+    "description": "Steven R. Schirripa. Junior's loyal underling, later a made man. UNMISTAKABLE very heavy-set Italian-American man, glasses, brown hair, usually in dark sport coats. Eventually marries Janice. Gentle demeanor.",
+    "first_seen": "S02E01",
+    "deceased_after": "S06E20"
+  },
+  "valentina_la_paz": {
+    "canonical_name": "Valentina La Paz",
+    "aliases": ["Valentina"],
+    "description": "Leslie Bega. Ralph Cifaretto's mistress (S4) who later sleeps with Tony. Latina woman 30s with long dark hair.",
+    "first_seen": "S04E01"
+  },
+  "joanne_moltisanti": {
+    "canonical_name": "Joanne Moltisanti",
+    "aliases": ["Joanne"],
+    "description": "Christopher's mother. Italian-American woman 50s/60s, mousy brown/gray hair, drab clothing. Bitter, complaining demeanor. Often shot in her cluttered home.",
+    "first_seen": "S04E01"
+  },
+  "carmine_lupertazzi_sr": {
+    "canonical_name": "Carmine Lupertazzi Sr.",
+    "aliases": ["Carmine", "Carmine Sr."],
+    "description": "Tony Lip. NY Lupertazzi family boss. Heavy-set elderly Italian-American man, slicked-back gray hair, glasses, dark suits. Slow-spoken, imperious.",
+    "first_seen": "S04E01",
+    "deceased_after": "S05E04"
+  },
+  "johnny_sack": {
+    "canonical_name": "John 'Johnny Sack' Sacrimoni",
+    "aliases": ["Johnny Sack", "John Sacrimoni", "Johnny"],
+    "description": "Vincent Curatola. NY Lupertazzi underboss, eventually boss. Tall trim Italian-American man 50s, dark hair, often in dark double-breasted suits. Married to Ginny. Reserved, calculating.",
+    "first_seen": "S02E01",
+    "deceased_after": "S06E12"
+  },
+  "ginny_sacrimoni": {
+    "canonical_name": "Ginny Sacrimoni",
+    "aliases": ["Ginny", "Virginia Sacrimoni"],
+    "description": "Denise Borino-Quinn. Johnny Sack's wife. VERY heavy-set Italian-American woman 40s/50s with dark hair, expensive clothing, soft-spoken.",
+    "first_seen": "S04E01"
+  },
+  "agent_deborah_ciccerone": {
+    "canonical_name": "Agent Deborah Ciccerone",
+    "aliases": ["Danielle", "Agent Ciccerone", "Deborah"],
+    "description": "Lola Glaudini. FBI agent assigned to befriend Adriana under the cover name 'Danielle'. Italian-American woman 30s, dark hair, casual or fashionable clothing.",
+    "first_seen": "S04E02"
+  },
+  "feech_la_manna": {
+    "canonical_name": "Feech La Manna",
+    "aliases": ["Feech", "Michele La Manna"],
+    "description": "Robert Loggia. Old-school mobster fresh out of prison in S5. Older Italian-American man 70s, white hair, glasses, sport coats.",
+    "first_seen": "S05E01"
+  },
+  "tony_blundetto": {
+    "canonical_name": "Tony Blundetto",
+    "aliases": ["Tony B", "Anthony Blundetto"],
+    "description": "Steve Buscemi. Tony Soprano's cousin, released from prison in S5. UNMISTAKABLE thin gaunt face, bulging blue eyes, receding sandy-brown hair, often in plain blue-collar workwear or modest jackets. Skinny build (very different from Tony Soprano's heavy build). Same-name confusion is common — when both Tonys are onscreen, Tony Blundetto is the slim wiry one and Tony Soprano is the heavy bald one.",
+    "first_seen": "S05E01",
+    "deceased_after": "S05E13"
+  },
+  "phil_leotardo": {
+    "canonical_name": "Phil Leotardo",
+    "aliases": ["Phil"],
+    "description": "Frank Vincent. Lupertazzi capo, then boss. Elderly Italian-American man late 60s, gray slicked-back hair, prominent nose, expensive suits, deliberate manner. Cold, vengeful.",
+    "first_seen": "S05E01",
+    "deceased_after": "S06E21"
+  },
+  "vito_spatafore": {
+    "canonical_name": "Vito Spatafore",
+    "aliases": ["Vito"],
+    "description": "Joseph R. Gannascoli. Soprano family capo. Very heavy-set Italian-American man 40s, dark hair, jowly face, usually in dark suits or polo shirts. Secretly gay (revealed in S6). Loses significant weight in S6 in New Hampshire.",
+    "first_seen": "S02E10",
+    "deceased_after": "S06E11"
+  },
+  "patsy_parisi": {
+    "canonical_name": "Patsy Parisi",
+    "aliases": ["Patsy"],
+    "description": "Dan Grimaldi. Soprano family soldier. Bald Italian-American man 50s, sad/serious face, dark casual clothes. Twin brother Philly is killed in S2.",
+    "first_seen": "S02E04"
+  },
+  "eugene_pontecorvo": {
+    "canonical_name": "Eugene Pontecorvo",
+    "aliases": ["Eugene"],
+    "description": "Robert Funaro. Soprano family soldier. Dark-haired Italian-American man 30s/40s, usually in casual button-downs.",
+    "first_seen": "S02E07",
+    "deceased_after": "S06E01"
+  },
+  "benny_fazio": {
+    "canonical_name": "Benny Fazio",
+    "aliases": ["Benny"],
+    "description": "Max Casella. Younger Soprano family associate. Short Italian-American man 30s, dark hair, usually in tracksuits or casual clothing.",
+    "first_seen": "S04E01"
+  },
+  "agent_harris": {
+    "canonical_name": "Agent Dwight Harris",
+    "aliases": ["Agent Harris", "Harris"],
+    "description": "Matt Servitto. FBI agent assigned to organized crime. Middle-aged white man, short dark hair, professional but rumpled. Eventually becomes a complicit go-between.",
+    "first_seen": "S01E08"
+  },
+  "rosalie_aprile": {
+    "canonical_name": "Rosalie Aprile",
+    "aliases": ["Rosalie", "Ro"],
+    "description": "Sharon Angela. Jackie Aprile Sr.'s widow. Italian-American woman 40s/50s, long dark hair, heavy makeup, expensive casual clothing. Close friend of Carmela.",
+    "first_seen": "S01E01"
+  },
+  "vito_jr": {
+    "canonical_name": "Vito Spatafore Jr.",
+    "aliases": ["Vito Jr."],
+    "description": "Brandon Hannan. Vito's troubled teenage son in S6. Overweight goth teenager with dyed black hair and Marilyn Manson aesthetic.",
+    "first_seen": "S06E13"
+  }
+}
