@@ -1,0 +1,17 @@
+{
+  "name": "sopranosdb-static-site",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Static front-end for SopranosDB: in-browser FTS5 search over a remote SQLite DB.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "sqlite-wasm-http": "1.2.0"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}

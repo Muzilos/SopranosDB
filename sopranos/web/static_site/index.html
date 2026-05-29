@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SopranosDB</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+</head>
+<body>
+<header>
+  <div class="titlebar">
+    <h1><a href="#/">SopranosDB</a> <span>scene-indexed fan database</span></h1>
+  </div>
+  <nav id="nav">
+    <a href="#/">Search</a>
+    <a href="#/episodes">Episodes</a>
+    <a href="#/characters">Characters</a>
+  </nav>
+
+  <form id="search-form">
+    <input type="text" id="q" placeholder="keywords — e.g. gabagool, therapy, restaurant dinner (or use filters below)" />
+    <input type="number" id="top" value="25" min="1" max="200" title="Max results" />
+    <button id="go" type="submit">Search</button>
+  </form>
+
+  <details class="filters" id="filters">
+    <summary>Filters <span id="filter-count" style="color:var(--muted)"></span></summary>
+    <div class="filter-grid" id="filter-grid"><!-- populated by JS --></div>
+    <div class="filter-actions">
+      <button type="button" class="ghost-btn" id="filter-clear">Clear filters</button>
+      <span class="badge">Keyword box ranks by full-text relevance (FTS5 bm25). Filters are exact. Leave the box empty to browse by filters alone.</span>
+    </div>
+  </details>
+</header>
+
+<main>
+  <div class="status" id="status">Loading database…</div>
+  <div id="results"></div>
+</main>
+
+<div id="lightbox"><img id="lightbox-img" alt="" /></div>
+
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>

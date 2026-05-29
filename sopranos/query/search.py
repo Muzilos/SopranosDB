@@ -115,16 +115,19 @@ _SELECT_COLS = (
 def _run(conn, qf: QueryFilter, match_expr: str | None, top_k: int):
     where, params = _build_filter_sql(qf)
     if match_expr:
+        # `rank` is FTS5's reserved special column — alias the score to something
+        # else and drive off the FTS table so MATCH/bm25 bind cleanly.
         sql = (
-            f"SELECT {_SELECT_COLS}, bm25(scenes_fts) AS rank "
-            f"FROM scenes s JOIN episodes e ON e.id = s.episode_id "
-            f"JOIN scenes_fts f ON f.rowid = s.id "
+            f"SELECT {_SELECT_COLS}, bm25(scenes_fts) AS bm25_score "
+            f"FROM scenes_fts "
+            f"JOIN scenes s ON s.id = scenes_fts.rowid "
+            f"JOIN episodes e ON e.id = s.episode_id "
             f"WHERE scenes_fts MATCH ? AND {where} "
-            f"ORDER BY rank LIMIT ?"
+            f"ORDER BY bm25_score LIMIT ?"
         )
         return conn.execute(sql, [match_expr, *params, top_k]).fetchall()
     sql = (
-        f"SELECT {_SELECT_COLS}, 0.0 AS rank "
+        f"SELECT {_SELECT_COLS}, 0.0 AS bm25_score "
         f"FROM scenes s JOIN episodes e ON e.id = s.episode_id "
         f"WHERE {where} "
         f"ORDER BY e.season, e.episode, s.scene_index LIMIT ?"
@@ -180,7 +183,7 @@ def search(qf: QueryFilter, top_k: int = 10) -> tuple[list[SearchHit], list[str]
                 scene_id=r["id"], season=r["season"], episode=r["episode"], title=r["title"],
                 scene_index=r["scene_index"], start_s=r["start_s"], end_s=r["end_s"],
                 summary=r["summary"], location_name=r["location_name"],
-                characters=chars, similarity=-float(r["rank"]), file_path=r["file_path"],
+                characters=chars, similarity=-float(r["bm25_score"]), file_path=r["file_path"],
                 reasons=_reasons(effective_qf, r),
             ))
         return out, relaxed

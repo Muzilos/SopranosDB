@@ -11,9 +11,12 @@ from rich.table import Table
 
 from sopranos.config import ROSTER_PATH
 from sopranos.db.connection import connect, init_db
-from sopranos.pipeline.orchestrator import STAGE_ORDER, run_episode
 from sopranos.utils.episode_paths import find_episode, list_season_episodes
 from sopranos.utils.timestamps import seconds_to_hhmmss
+
+# Mirrors sopranos.pipeline.orchestrator.STAGE_ORDER. Kept here as a plain literal
+# so the CLI (query/serve/stats/roster) doesn't import the heavy ingest pipeline.
+STAGE_ORDER = ["probe", "audio", "asr", "shots", "scenes", "keyframes", "label", "index"]
 
 app = typer.Typer(help="The Sopranos scene-indexed query CLI")
 roster_app = typer.Typer(help="Cast roster management")
@@ -37,6 +40,8 @@ def ingest(
     if force_from is not None and force_from not in STAGE_ORDER:
         console.print(f"[red]--force-from must be one of {STAGE_ORDER}[/red]")
         raise typer.Exit(2)
+
+    from sopranos.pipeline.orchestrator import run_episode
 
     if episode:
         ref = find_episode(episode)
@@ -110,17 +115,14 @@ def serve(
 
     Build it first with: python scripts/build_static_site.py
     """
-    import functools
-    import http.server
-    import socketserver
+    from sopranos.web.range_server import make_server
 
     root = Path(directory).resolve()
     if not root.is_dir():
         console.print(f"[red]{root} not found — run `python scripts/build_static_site.py` first.[/red]")
         raise typer.Exit(2)
-    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(root))
     console.print(f"[green]Serving {root}[/green] → http://{host}:{port}  (Ctrl-C to stop)")
-    with socketserver.TCPServer((host, port), handler) as httpd:
+    with make_server(root, host, port) as httpd:
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

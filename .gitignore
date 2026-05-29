@@ -1,2 +1,14 @@
 .env
 .venv/
+
+# Python
+__pycache__/
+*.pyc
+
+# Static-site build
+/dist/
+sopranos/web/static_site/node_modules/
+sopranos/web/static_site/dist/
+
+# Cloudflare wrangler
+.wrangler/

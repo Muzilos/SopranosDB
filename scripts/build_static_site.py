@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""Build the static SopranosDB site bundle into ``dist/``.
+
+The deployed site is fully static: a Vite-built front-end + the official SQLite
+WASM engine (via ``sqlite-wasm-http``) that runs the FTS5 + facet SQL in the
+browser against a read-only ``.db`` fetched with HTTP range requests. No app
+server, no LLM, no ML model at request time.
+
+This script:
+  1. builds the front-end with Vite (npm install + vite build) — emits the app
+     bundle, the SQLite worker chunks, and the ~3.6 MB .wasm into dist/assets/;
+  2. trims a read-only copy of the corpus DB into dist/site.db;
+  3. writes filters.json (facet vocab) and config.json (db/keyframe URLs).
+
+Outputs (under ``--out``, default ``dist/``):
+    index.html, assets/*               Vite bundle (app + SQLite worker + .wasm)
+    config.json                        runtime config (db url, keyframe base, page size)
+    filters.json                       facet vocab (characters, locations, moods, ...)
+    site.db                            trimmed read-only DB (base tables + FTS5)
+    artifacts -> <ARTIFACTS_DIR>       symlink so `sopranos serve` can show keyframes locally
+
+Local preview:
+    python scripts/build_static_site.py
+    sopranos serve            # http://127.0.0.1:8000
+
+Production: re-run pointing the front-end at your hosts, then upload the subsets
+the script prints (the Vite bundle to a static host; site.db + keyframes to
+object storage):
+    python scripts/build_static_site.py \
+        --db-url https://media.example.com/site.db \
+        --keyframe-base https://media.example.com
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import sqlite3
+import subprocess
+from pathlib import Path
+
+from sopranos.config import (
+    ARTIFACTS_DIR, DB_PATH, INTERIOR_EXTERIOR, LOCATION_TYPES, MOODS, SCHEMA_PATH,
+    TIMES_OF_DAY, VIOLENCE_LEVELS,
+)
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+STATIC_SRC = REPO_ROOT / "sopranos" / "web" / "static_site"
+
+# sqlite-wasm-http recommends a 1024-byte page so each HTTP range request
+# transfers less dead weight. Must be <= the client's httpOptions.maxPageSize.
+PAGE_SIZE = 1024
+
+# Columns copied into the trimmed scenes table. raw_vlm_json is intentionally
+# dropped (debug-only blob); everything FTS indexes or the UI shows is kept.
+_SCENE_COLS = (
+    "id", "episode_id", "scene_index", "start_s", "end_s", "duration_s", "shot_count",
+    "summary", "location_name", "location_type", "location_interior_exterior",
+    "time_of_day", "mood", "violence_level", "group_size_total", "background_people_count",
+    "dialogue_highlight", "transcript_text", "keyframes_json",
+)
+
+
+def build_site_db(src: Path, dst: Path) -> None:
+    """Create a compact, read-only-friendly copy: base tables + FTS5 only,
+    no vector table / api_usage / shots / raw_vlm_json, journal_mode=DELETE,
+    page_size 1024, VACUUMed."""
+    if not src.is_file():
+        raise SystemExit(f"source DB not found: {src} (build the corpus first)")
+    dst.unlink(missing_ok=True)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+
+    conn = sqlite3.connect(dst, isolation_level=None)  # autocommit; VACUUM needs no open txn
+    try:
+        conn.execute(f"PRAGMA page_size = {PAGE_SIZE}")
+        # schema.sql creates the base tables + FTS5 + triggers (no scenes_vec — that
+        # lives in db.connection.init_db and we deliberately omit it here).
+        conn.executescript(SCHEMA_PATH.read_text())
+        conn.execute("DROP TABLE IF EXISTS shots")
+        conn.execute("DROP TABLE IF EXISTS api_usage")
+
+        conn.execute("ATTACH DATABASE ? AS src", (str(src),))
+        conn.execute("BEGIN")
+        conn.execute("INSERT INTO episodes SELECT * FROM src.episodes")
+        cols = ", ".join(_SCENE_COLS)
+        conn.execute(  # the scenes_ai trigger populates scenes_fts as we insert
+            f"INSERT INTO scenes ({cols}) SELECT {cols} FROM src.scenes"
+        )
+        conn.execute("INSERT INTO scene_characters SELECT * FROM src.scene_characters")
+        conn.execute("INSERT INTO scene_tags SELECT * FROM src.scene_tags")
+        conn.execute("INSERT INTO characters SELECT * FROM src.characters")
+        conn.execute("COMMIT")
+        conn.execute("DETACH DATABASE src")
+
+        conn.execute("PRAGMA journal_mode = DELETE")  # WAL can't be served read-only/static
+        conn.execute("INSERT INTO scenes_fts(scenes_fts) VALUES('optimize')")
+        conn.execute("VACUUM")
+    finally:
+        conn.close()
+
+    size_mb = dst.stat().st_size / 1e6
+    with sqlite3.connect(dst) as c:
+        n_scenes = c.execute("SELECT COUNT(*) FROM scenes").fetchone()[0]
+        n_eps = c.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+    print(f"  site.db: {n_eps} episodes, {n_scenes} scenes, {size_mb:.1f} MB")
+
+
+def write_filters_json(db: Path, dst: Path, top_tags: int) -> None:
+    """Facet vocab for the UI dropdowns + roster (with aliases) for the
+    single-box keyword→facet parser. Single source of truth = config + the DB."""
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        roster = [
+            {"canonical_name": r["canonical_name"], "aliases": json.loads(r["aliases_json"] or "[]")}
+            for r in conn.execute("SELECT canonical_name, aliases_json FROM characters ORDER BY canonical_name")
+        ]
+        top_acts = [r[0] for r in conn.execute(
+            "SELECT tag_value FROM scene_tags WHERE tag_type='activity' "
+            "GROUP BY tag_value ORDER BY COUNT(*) DESC LIMIT ?", (top_tags,))]
+        top_topics = [r[0] for r in conn.execute(
+            "SELECT tag_value FROM scene_tags WHERE tag_type='topic' "
+            "GROUP BY tag_value ORDER BY COUNT(*) DESC LIMIT ?", (top_tags,))]
+
+    payload = {
+        "characters": [e["canonical_name"] for e in roster],
+        "roster": roster,
+        "location_types": LOCATION_TYPES,
+        "interior_exterior": INTERIOR_EXTERIOR,
+        "times_of_day": TIMES_OF_DAY,
+        "moods": MOODS,
+        "violence_levels": VIOLENCE_LEVELS,
+        "activities": top_acts,
+        "topics": top_topics,
+    }
+    dst.write_text(json.dumps(payload, indent=2))
+    print(f"  filters.json: {len(roster)} characters, {len(top_acts)} activities, {len(top_topics)} topics")
+
+
+def vite_build(out: Path, skip_install: bool) -> None:
+    """Build the front-end with Vite and copy its output into ``out``.
+
+    Vite bundles the app, the sqlite-wasm-http worker chunks, and the SQLite
+    .wasm into static_site/dist/; we then mirror that into the bundle dir.
+    """
+    npm = shutil.which("npm")
+    if not npm:
+        raise SystemExit("npm not found — install Node.js (>=18) to build the front-end.")
+    if not skip_install and not (STATIC_SRC / "node_modules").is_dir():
+        print("  npm install …")
+        subprocess.run([npm, "install"], cwd=STATIC_SRC, check=True)
+    print("  vite build …")
+    subprocess.run([npm, "run", "build"], cwd=STATIC_SRC, check=True)
+
+    vite_out = STATIC_SRC / "dist"
+    for item in vite_out.iterdir():
+        dest = out / item.name
+        if item.is_dir():
+            shutil.copytree(item, dest, dirs_exist_ok=True)
+        else:
+            shutil.copy2(item, dest)
+    assets = list((out / "assets").glob("*")) if (out / "assets").is_dir() else []
+    print(f"  front-end: index.html + {len(assets)} bundled assets (app, SQLite worker, .wasm)")
+
+
+def write_config_json(out: Path, db_url: str, keyframe_base: str) -> None:
+    """Runtime config the front-end fetches at startup. Keeping the URLs out of
+    the JS bundle means a redeploy can re-point the DB/keyframes without rebuilding."""
+    config = {
+        "dbUrl": db_url,
+        "keyframeBase": keyframe_base.rstrip("/"),
+        "maxPageSize": PAGE_SIZE,
+        "cacheSize": 4096,
+    }
+    (out / "config.json").write_text(json.dumps(config, indent=2) + "\n")
+    print(f"  config.json: dbUrl={db_url}")
+
+
+def link_keyframes(out: Path) -> None:
+    link = out / "artifacts"
+    if link.is_symlink() or link.exists():
+        if link.is_symlink():
+            link.unlink()
+        else:
+            return  # a real dir is already there; leave it
+    if ARTIFACTS_DIR.is_dir():
+        link.symlink_to(ARTIFACTS_DIR)
+        print(f"  artifacts -> {ARTIFACTS_DIR} (local keyframe preview)")
+    else:
+        print(f"  (skipped keyframe symlink: {ARTIFACTS_DIR} not found)")
+
+
+def print_deploy_notes(out: Path, db_url: str, keyframe_base: str) -> None:
+    print("\nDeploy:")
+    print(f"  1. Keyframes -> object storage (preserve <EP>/keyframes/<file> layout):")
+    print(f"       python scripts/upload_keyframes_r2.py")
+    print(f"  2. site.db -> object storage (needs CORS: allow GET+Range from the site origin,")
+    print(f"     expose Accept-Ranges/Content-Range/Content-Length). No per-file size limit on R2.")
+    print(f"       npx wrangler r2 object put $R2_BUCKET/site.db --file {out/'site.db'} --remote")
+    print(f"  3. Static bundle -> Cloudflare Pages / Netlify / GitHub Pages (exclude site.db, which is on R2):")
+    print(f"       rm {out/'site.db'}; npx wrangler pages deploy {out} --project-name sopranosdb")
+    print(f"  Front-end URLs come from config.json (no JS rebuild needed to re-point):")
+    print(f"     dbUrl={db_url!r}, keyframeBase={keyframe_base!r}")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Build the static SopranosDB site bundle.")
+    ap.add_argument("--out", default=str(REPO_ROOT / "dist"), help="output directory")
+    ap.add_argument("--source-db", default=str(DB_PATH), help="source sopranos.db")
+    ap.add_argument("--db-url", default="site.db",
+                    help="URL the browser fetches the DB from (default: same-origin site.db)")
+    ap.add_argument("--keyframe-base", default="artifacts",
+                    help="base URL for keyframe images (default: local artifacts symlink)")
+    ap.add_argument("--top-tags", type=int, default=40, help="how many top activities/topics to expose")
+    ap.add_argument("--skip-install", action="store_true",
+                    help="skip `npm install` (assume node_modules is current)")
+    ap.add_argument("--no-link-keyframes", action="store_true",
+                    help="don't symlink dist/artifacts -> ARTIFACTS_DIR")
+    args = ap.parse_args()
+
+    out = Path(args.out)
+    if out.exists():
+        # Clear stale output but keep the artifacts symlink (cheap to recreate, but
+        # avoids rewalking) — simplest is a full clean.
+        shutil.rmtree(out)
+    out.mkdir(parents=True, exist_ok=True)
+    print(f"Building static site -> {out}")
+
+    vite_build(out, skip_install=args.skip_install)
+    build_site_db(Path(args.source_db), out / "site.db")
+    write_filters_json(out / "site.db", out / "filters.json", args.top_tags)
+    write_config_json(out, args.db_url, args.keyframe_base)
+    if not args.no_link_keyframes:
+        link_keyframes(out)
+    print_deploy_notes(out, args.db_url, args.keyframe_base)
+    print("\nPreview: sopranos serve   (then open http://127.0.0.1:8000)")
+
+
+if __name__ == "__main__":
+    main()

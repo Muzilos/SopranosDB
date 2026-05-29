@@ -7,20 +7,27 @@ name = "sopranos"
 version = "0.1.0"
 description = "Scene-indexed query database for The Sopranos"
 requires-python = ">=3.10"
+# Base install covers the query CLI (FTS5 + facets) and the static-site build.
+# No LLM, no ML model, no web framework at this layer.
 dependencies = [
+  "typer>=0.12",
+  "rich>=13",
+  "pydantic>=2.7",
+]
+
+# Offline corpus ingest (probe/asr/scenes/keyframes/VLM-label/embed/index).
+# Heavy and only needed when (re)building the database, never to serve the site.
+[project.optional-dependencies]
+ingest = [
   "anthropic>=0.40",
   "faster-whisper>=1.0",
   "scenedetect[opencv]>=0.6.4",
   "opencv-python-headless>=4.9",
   "pillow>=10",
   "numpy>=1.26",
-  "typer>=0.12",
-  "rich>=13",
   "tqdm>=4.66",
-  "pydantic>=2.7",
   "sentence-transformers>=2.7",
   "sqlite-vec>=0.1.6",
-  "flask>=3.0",
 ]
 
 [project.scripts]
