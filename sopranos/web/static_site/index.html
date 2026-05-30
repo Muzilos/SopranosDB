@@ -8,7 +8,8 @@
 <body>
 <header>
   <div class="titlebar">
-    <h1><a href="#/">SopranosDB</a> <span>scene-indexed fan database</span></h1>
+    <h1><a href="#/">Sopranos<span class="mark">DB</span></a></h1>
+    <p class="tagline">8,082 scenes. 86 episodes. Whaddya lookin' for?</p>
   </div>
   <nav id="nav">
     <a href="#/">Search</a>
@@ -17,17 +18,22 @@
   </nav>
 
   <form id="search-form">
-    <input type="text" id="q" placeholder="keywords — e.g. gabagool, therapy, restaurant dinner (or use filters below)" />
+    <input type="text" id="q" placeholder="keywords — e.g. gabagool, therapy, boat… (or just work the filters)" />
     <input type="number" id="top" value="25" min="1" max="200" title="Max results" />
     <button id="go" type="submit">Search</button>
   </form>
 
+  <div class="active-bar" id="active-bar"><!-- active filter pills, populated by JS --></div>
+
   <details class="filters" id="filters">
-    <summary>Filters <span id="filter-count" style="color:var(--muted)"></span></summary>
+    <summary>
+      <span class="filters-caret" aria-hidden="true">▸</span>
+      Filters <span class="filter-count" id="filter-count"></span>
+    </summary>
     <div class="filter-grid" id="filter-grid"><!-- populated by JS --></div>
     <div class="filter-actions">
       <button type="button" class="ghost-btn" id="filter-clear">Clear filters</button>
-      <span class="badge">Keyword box ranks by full-text relevance (FTS5 bm25). Filters are exact. Leave the box empty to browse by filters alone.</span>
+      <span class="badge">Keywords rank by full-text relevance. Filters are exact — pick from a list and they stack up as removable tags. Leave the box empty to browse by filters alone.</span>
     </div>
   </details>
 </header>

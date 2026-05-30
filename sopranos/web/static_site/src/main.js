@@ -158,7 +158,7 @@ function renderScene(h) {
   const transcript = h.transcript_text
     ? `<details><summary>Transcript</summary><pre>${esc(h.transcript_text)}</pre></details>` : "";
   const keyframes = keyframeUrls(h.keyframes_json, h.season, h.episode)
-    .map((url) => `<img src="${esc(url)}" data-full="${esc(url)}" loading="lazy" alt="" />`).join("");
+    .map((url) => `<img src="${esc(url)}" data-full="${esc(url)}" loading="lazy" decoding="async" alt="" />`).join("");
   return `
     <div class="result">
       <div class="result-head">
@@ -178,7 +178,7 @@ function renderScene(h) {
 
 function renderScenes(rows, headingHtml = "") {
   if (!rows.length) {
-    resultsEl.innerHTML = headingHtml + `<div class="empty">No scenes found.</div>`;
+    resultsEl.innerHTML = headingHtml + `<div class="empty">No scenes match that. Fuhgeddaboudit — try fewer filters.</div>`;
     return;
   }
   resultsEl.innerHTML = headingHtml + rows.map(renderScene).join("");
@@ -195,71 +195,195 @@ function bindKeyframes() {
 }
 
 // ---------- filter UI ----------
+//
+// Filters are held in a single in-memory state object (FILTERS), NOT read out of
+// the DOM. Multi-value facets use a click-to-add chip control (pick from a dropdown,
+// it becomes a removable pill) instead of a native <select multiple>, which needs
+// Ctrl/Cmd-click and silently drops selections. An "active filters" bar mirrors the
+// whole state so it can be cleared one pill at a time.
 
-const FILTER_SPECS = [
-  ["characters", "Required characters", "multi", "characters"],
-  ["excluded_characters", "Excluded characters", "multi", "characters"],
-  ["location_types", "Location type", "multi", "location_types"],
-  ["activities", "Activities", "multi", "activities"],
-  ["topics", "Topics", "multi", "topics"],
-  ["time_of_day", "Time of day", "single", "times_of_day"],
-  ["location_interior_exterior", "Interior/Exterior", "single", "interior_exterior"],
-  ["mood", "Mood", "single", "moods"],
-  ["violence_level", "Violence level", "single", "violence_levels"],
-  ["min_group_size", "Min group size", "number", null],
-  ["max_group_size", "Max group size", "number", null],
+// The facet vocab is stored snake_case (e.g. "restaurant_or_food_business"); show it
+// as readable prose. A few values read better with an explicit override.
+const LABEL_OVERRIDES = {
+  dawn_dusk: "Dawn / dusk",
+  location_interior_exterior: "Inside / outside",
+};
+function humanize(v) {
+  if (v == null || v === "") return "";
+  if (LABEL_OVERRIDES[v]) return LABEL_OVERRIDES[v];
+  const s = String(v).replace(/_or_/g, " / ").replace(/_/g, " ");
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// Grouped for scannability; the headings double as a bit of in-world flavor.
+const FILTER_GROUPS = [
+  ["The Family", [
+    ["characters", "Must include", "multi", "characters"],
+    ["excluded_characters", "Leave out", "multi", "characters"],
+    ["__group__", "People in scene", "range", null],
+  ]],
+  ["The Neighborhood", [
+    ["location_types", "Location", "multi", "location_types"],
+    ["location_interior_exterior", "Inside / outside", "single", "interior_exterior"],
+    ["time_of_day", "Time of day", "single", "times_of_day"],
+  ]],
+  ["The Vibe", [
+    ["mood", "Mood", "single", "moods"],
+    ["violence_level", "Violence", "single", "violence_levels"],
+    ["activities", "What's happening", "multi", "activities"],
+    ["topics", "What's it about", "multi", "topics"],
+  ]],
 ];
+
+// name -> human label, for the active-filter pills (the range pair is special-cased).
+const FILTER_LABELS = Object.fromEntries(
+  FILTER_GROUPS.flatMap(([, specs]) => specs.map(([name, label]) => [name, label])),
+);
+
+// Live filter state. Multi -> array of values; single -> string; number -> int.
+let FILTERS = {};
+
+function fieldControl(name, label, kind, optKey) {
+  if (kind === "range") {
+    return `<div class="f-field f-range">
+      <span class="f-label">${esc(label)}</span>
+      <div class="f-range-row">
+        <input type="number" class="f-num" data-field="min_group_size" placeholder="min" min="1" max="50" />
+        <span class="f-to">to</span>
+        <input type="number" class="f-num" data-field="max_group_size" placeholder="max" min="1" max="50" />
+      </div>
+    </div>`;
+  }
+  const opts = (OPTIONS[optKey] || []).map((v) => `<option value="${esc(v)}">${esc(humanize(v))}</option>`).join("");
+  if (kind === "multi") {
+    return `<div class="f-field f-multi" data-field="${name}">
+      <span class="f-label">${esc(label)}</span>
+      <select class="f-add" data-field="${name}" aria-label="Add ${esc(label.toLowerCase())}">
+        <option value="">+ add…</option>${opts}
+      </select>
+      <div class="f-chips" data-chips="${name}"></div>
+    </div>`;
+  }
+  return `<div class="f-field" data-field="${name}">
+    <span class="f-label">${esc(label)}</span>
+    <select class="f-single" data-field="${name}"><option value="">— any —</option>${opts}</select>
+  </div>`;
+}
 
 function buildFilterUI() {
   const grid = $("#filter-grid");
-  grid.innerHTML = FILTER_SPECS.map(([name, label, kind, optKey]) => {
-    if (kind === "number") {
-      return `<label>${label}<input type="number" min="1" max="50" data-filter="${name}" /></label>`;
-    }
-    const opts = (OPTIONS[optKey] || []).map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join("");
-    const multi = kind === "multi" ? "multiple" : "";
-    const empty = kind === "single" ? `<option value="">— any —</option>` : "";
-    return `<label>${label}<select data-filter="${name}" ${multi}>${empty}${opts}</select></label>`;
-  }).join("");
+  grid.innerHTML = FILTER_GROUPS.map(([title, specs]) => `
+    <section class="f-group">
+      <div class="f-group-title">${esc(title)}</div>
+      <div class="f-group-fields">${specs.map((s) => fieldControl(...s)).join("")}</div>
+    </section>`).join("");
 
-  grid.addEventListener("change", updateFilterCount);
-  $("#filter-clear").addEventListener("click", () => {
-    $$("#filter-grid [data-filter]").forEach((el) => {
-      if (el.tagName === "SELECT" && el.multiple) [...el.options].forEach((o) => (o.selected = false));
-      else el.value = "";
-    });
-    updateFilterCount();
+  // Add-to-list dropdowns: selecting an option appends a chip, then resets.
+  grid.addEventListener("change", (e) => {
+    const el = e.target;
+    const name = el.dataset.field;
+    if (!name) return;
+    if (el.classList.contains("f-add")) {
+      const v = el.value;
+      el.value = "";
+      if (!v) return;
+      const arr = (FILTERS[name] ||= []);
+      if (!arr.includes(v)) arr.push(v);
+    } else if (el.classList.contains("f-single")) {
+      if (el.value) FILTERS[name] = el.value; else delete FILTERS[name];
+    } else if (el.classList.contains("f-num")) {
+      const n = parseInt(el.value, 10);
+      if (Number.isFinite(n)) FILTERS[name] = n; else delete FILTERS[name];
+    }
+    syncFilterUI();
   });
+
+  $("#filter-clear").addEventListener("click", clearFilters);
+  syncFilterUI();
 }
 
-function readFilters() {
-  const out = {};
-  $$("#filter-grid [data-filter]").forEach((el) => {
-    const name = el.dataset.filter;
-    if (el.tagName === "SELECT" && el.multiple) {
-      const vals = [...el.selectedOptions].map((o) => o.value).filter(Boolean);
-      if (vals.length) out[name] = vals;
-    } else if (el.value) {
-      out[name] = el.value;
-    }
+function removeFilterValue(name, value) {
+  if (Array.isArray(FILTERS[name])) {
+    FILTERS[name] = FILTERS[name].filter((v) => v !== value);
+    if (!FILTERS[name].length) delete FILTERS[name];
+  } else {
+    delete FILTERS[name];
+  }
+  syncFilterUI();
+}
+
+function clearFilters() {
+  FILTERS = {};
+  $$("#filter-grid select, #filter-grid input").forEach((el) => (el.value = ""));
+  syncFilterUI();
+}
+
+function chipHtml(name, value, text) {
+  return `<button type="button" class="chip" data-rm-field="${esc(name)}" data-rm-val="${esc(value)}">
+    ${esc(text)}<span class="chip-x" aria-hidden="true">×</span></button>`;
+}
+
+// Reflect FILTERS into the DOM: per-field chips, the single/number controls,
+// the active-filters bar, the count badge.
+function syncFilterUI() {
+  // Per-field chip rows (multi only).
+  $$("#filter-grid [data-chips]").forEach((box) => {
+    const name = box.dataset.chips;
+    box.innerHTML = (FILTERS[name] || []).map((v) => chipHtml(name, v, humanize(v))).join("");
   });
-  return out;
+  // Keep single-selects / number inputs in step with the state.
+  $$("#filter-grid .f-single").forEach((el) => (el.value = FILTERS[el.dataset.field] || ""));
+  $$("#filter-grid .f-num").forEach((el) => (el.value = FILTERS[el.dataset.field] ?? ""));
+
+  // Wire chip removal (delegated once is simpler, but rebuilding innerHTML drops
+  // listeners — so (re)bind on the live nodes here and in the active bar).
+  $$(".chip").forEach((c) =>
+    c.onclick = () => removeFilterValue(c.dataset.rmField, c.dataset.rmVal));
+
+  renderActiveBar();
+  const n = facetCount();
+  $("#filter-count").textContent = n ? `${n} active` : "";
+  if (n > 0) $("#filters").open = true;
+}
+
+function renderActiveBar() {
+  const bar = $("#active-bar");
+  if (!bar) return;
+  const pills = [];
+  for (const [name, val] of Object.entries(FILTERS)) {
+    const label = FILTER_LABELS[name] || (name === "min_group_size" || name === "max_group_size" ? "People in scene" : name);
+    if (Array.isArray(val)) {
+      for (const v of val) pills.push(chipHtml(name, v, `${label}: ${humanize(v)}`));
+    } else if (name === "min_group_size") {
+      pills.push(chipHtml(name, val, `≥ ${val} people`));
+    } else if (name === "max_group_size") {
+      pills.push(chipHtml(name, val, `≤ ${val} people`));
+    } else {
+      pills.push(chipHtml(name, val, `${label}: ${humanize(val)}`));
+    }
+  }
+  if (!pills.length) { bar.innerHTML = ""; bar.classList.remove("show"); return; }
+  bar.classList.add("show");
+  bar.innerHTML = `<span class="active-label">Filtering by</span>${pills.join("")}` +
+    `<button type="button" class="active-clear" id="active-clear">Clear all</button>`;
+  $$("#active-bar .chip").forEach((c) =>
+    c.onclick = () => removeFilterValue(c.dataset.rmField, c.dataset.rmVal));
+  $("#active-clear").onclick = clearFilters;
 }
 
 function currentFacets() {
-  const raw = readFilters();
   return {
-    required_characters: raw.characters || [],
-    excluded_characters: raw.excluded_characters || [],
-    location_types: raw.location_types || [],
-    activities: raw.activities || [],
-    topics: raw.topics || [],
-    time_of_day: raw.time_of_day || null,
-    location_interior_exterior: raw.location_interior_exterior || null,
-    mood: raw.mood || null,
-    violence_level: raw.violence_level || null,
-    min_group_size: raw.min_group_size ? parseInt(raw.min_group_size, 10) : null,
-    max_group_size: raw.max_group_size ? parseInt(raw.max_group_size, 10) : null,
+    required_characters: FILTERS.characters || [],
+    excluded_characters: FILTERS.excluded_characters || [],
+    location_types: FILTERS.location_types || [],
+    activities: FILTERS.activities || [],
+    topics: FILTERS.topics || [],
+    time_of_day: FILTERS.time_of_day || null,
+    location_interior_exterior: FILTERS.location_interior_exterior || null,
+    mood: FILTERS.mood || null,
+    violence_level: FILTERS.violence_level || null,
+    min_group_size: FILTERS.min_group_size ?? null,
+    max_group_size: FILTERS.max_group_size ?? null,
   };
 }
 
@@ -273,12 +397,6 @@ function facetCount() {
   return n;
 }
 
-function updateFilterCount() {
-  const n = facetCount();
-  $("#filter-count").textContent = n ? `(${n} active)` : "";
-  if (n > 0) $("#filters").open = true;
-}
-
 // ---------- search action ----------
 
 async function doSearch() {
@@ -286,8 +404,8 @@ async function doSearch() {
   const top = Math.max(1, Math.min(parseInt($("#top").value, 10) || 25, 200));
   const f = currentFacets();
   if (!text && facetCount() === 0) {
-    statusEl.textContent = "Enter keywords or pick at least one filter.";
-    resultsEl.innerHTML = `<div class="empty">Search ~8,000 indexed scenes by keyword, or browse by episode / character / filter.</div>`;
+    statusEl.textContent = "Type some keywords, or pick a filter or two.";
+    resultsEl.innerHTML = `<div class="empty">Search 8,082 indexed scenes by keyword, or work the filters — by family, neighborhood, or vibe.</div>`;
     return;
   }
   $("#go").disabled = true;
@@ -417,8 +535,11 @@ async function route() {
 // ---------- init ----------
 
 async function loadDatabase(sqlite3) {
-  // One-time download of the whole DB (gzip-encoded on the wire, ~7.7 MB), then
-  // deserialize into an in-memory database. Every subsequent query is local.
+  // One-time download of the whole DB (compressed on the wire — br/gzip, ~7 MB —
+  // and decompressed transparently by the browser), then deserialize into an
+  // in-memory database. Every subsequent query is local; nothing is persisted to
+  // disk (no OPFS / IndexedDB / localStorage), so the only client footprint is
+  // this RAM copy plus whatever the browser keeps in its HTTP cache.
   const url = new URL(CFG.dbUrl, location.href).href;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`HTTP ${resp.status} fetching the database`);
@@ -435,15 +556,25 @@ async function loadDatabase(sqlite3) {
     received += value.length;
     statusEl.textContent = `Loading database… ${(received / 1e6).toFixed(1)} MB`;
   }
-  const bytes = new Uint8Array(received);
-  let off = 0;
-  for (const c of chunks) { bytes.set(c, off); off += c.length; }
 
-  const p = sqlite3.wasm.alloc(bytes.length);
-  sqlite3.wasm.heap8u().set(bytes, p);
+  // Copy the chunks straight into the WASM heap, releasing each one as we go,
+  // instead of first assembling a separate contiguous Uint8Array. That avoids a
+  // second full-size (~22 MB) JS buffer, cutting the peak load-time memory from
+  // ~3× to ~2× the DB size. alloc() may grow (and detach) the heap, so take the
+  // heap8u() view *after* allocating.
+  const p = sqlite3.wasm.alloc(received);
+  const heap = sqlite3.wasm.heap8u();
+  let off = 0;
+  for (let i = 0; i < chunks.length; i++) {
+    heap.set(chunks[i], p + off);
+    off += chunks[i].length;
+    chunks[i] = null; // drop the reference so the GC can reclaim it now
+  }
+  chunks.length = 0;
+
   const db = new sqlite3.oo1.DB();
   const rc = sqlite3.capi.sqlite3_deserialize(
-    db.pointer, "main", p, bytes.length, bytes.length,
+    db.pointer, "main", p, received, received,
     sqlite3.capi.SQLITE_DESERIALIZE_FREEONCLOSE,
   );
   if (rc) throw new Error(`sqlite3_deserialize failed (rc=${rc})`);
@@ -476,7 +607,7 @@ async function init() {
   lightbox.addEventListener("click", () => lightbox.classList.remove("show"));
   window.addEventListener("hashchange", route);
 
-  statusEl.textContent = "Search ~8,000 indexed scenes by keyword, or browse by episode / character / filter.";
+  statusEl.textContent = "Search 8,082 indexed scenes by keyword, or browse by episode / character / filter.";
   route();
 }
 
