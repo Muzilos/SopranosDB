@@ -1,8 +1,8 @@
 import { defineConfig } from "vite";
 
 // Static bundle for any host / any sub-path: relative asset URLs (`base: "./"`).
-// sqlite-wasm-http spawns ES-module Web Workers and ships the official SQLite
-// WASM as an asset — Vite bundles both automatically (`worker.format: "es"`).
+// @sqlite.org/sqlite-wasm ships the official SQLite WASM as an asset; Vite emits
+// it and rewrites the `new URL(..., import.meta.url)` references.
 export default defineConfig({
   base: "./",
   build: {
@@ -14,9 +14,9 @@ export default defineConfig({
   worker: {
     format: "es",
   },
-  // sqlite-wasm-http must not be pre-bundled (it has worker/wasm entry points
-  // Vite's optimizer would mangle).
+  // The SQLite WASM package must not be pre-bundled (it references its .wasm via
+  // import.meta.url, which Vite's optimizer would mangle).
   optimizeDeps: {
-    exclude: ["sqlite-wasm-http"],
+    exclude: ["@sqlite.org/sqlite-wasm"],
   },
 });

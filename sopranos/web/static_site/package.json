@@ -9,7 +9,7 @@
     "build": "vite build"
   },
   "dependencies": {
-    "sqlite-wasm-http": "1.2.0"
+    "@sqlite.org/sqlite-wasm": "3.53.0-build1"
   },
   "devDependencies": {
     "vite": "^5.4.0"

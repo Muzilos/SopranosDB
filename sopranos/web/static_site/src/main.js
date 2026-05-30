@@ -1,11 +1,13 @@
 // SopranosDB static front-end. Runs FTS5 keyword search + structured-facet
-// filtering entirely in the browser against a read-only SQLite file served over
-// HTTP range requests. No app server, no LLM, no embeddings.
+// filtering entirely in the browser. The read-only SQLite DB (~23 MB, served
+// gzip-compressed to ~7.7 MB) is downloaded ONCE and queried in memory — so
+// every query after the initial load is instant, with zero network. No app
+// server, no LLM, no embeddings.
 //
-// Engine: sqlite-wasm-http (the official SQLite WASM build + an HTTP-range VFS),
-// bundled by Vite. The worker + .wasm are emitted as hashed assets.
+// Engine: the official SQLite WASM build (@sqlite.org/sqlite-wasm), bundled by
+// Vite (the .wasm is emitted as a hashed asset).
 
-import { createSQLiteHTTPPool } from "sqlite-wasm-http";
+import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
 import "./style.css";
 
 let CFG = {};        // config.json (dbUrl, keyframeBase)
@@ -17,7 +19,7 @@ const resultsEl = $("#results");
 const lightbox = $("#lightbox");
 const lightboxImg = $("#lightbox-img");
 
-let pool = null;     // SQLiteHTTPPool — exec(sql, bind, {rowMode}) over HTTP ranges
+let sdb = null;      // in-memory sqlite3.oo1.DB
 let OPTIONS = {};    // filters.json
 
 // ---------- helpers ----------
@@ -43,18 +45,27 @@ function keyframeUrls(json, season, episode) {
   return arr.map((p) => `${CFG.keyframeBase}/${code}/keyframes/${String(p).split("/").pop()}`);
 }
 
-// Free text -> FTS5 MATCH expression: quote each token (so punctuation can't break
-// the query), OR-join for recall; bm25() ranks. Mirrors search.py:_fts_match_expr.
+// Common English words carry no signal but blow up the FTS scan (they match
+// nearly every scene), so drop them from the MATCH. Mirrors search.py.
+const STOPWORDS = new Set(
+  ("a an and are as at be been but by for from had has have he her his in into is it its " +
+   "of on or that the their them they this to was were what when which who will with you")
+    .split(" "),
+);
+
+// Free text -> FTS5 MATCH expression: drop stopwords, quote each remaining token
+// (so punctuation can't break the query), OR-join for recall; bm25() ranks.
 function ftsMatch(text) {
-  const toks = (text || "").match(/[A-Za-z0-9']+/g) || [];
+  let toks = (text || "").match(/[A-Za-z0-9']+/g) || [];
+  const content = toks.filter((t) => !STOPWORDS.has(t.toLowerCase()));
+  toks = content.length ? content : toks; // all-stopword query: fall back to as-typed
   if (!toks.length) return null;
   return toks.map((t) => `"${t}"`).join(" OR ");
 }
 
-async function q(sql, params = []) {
-  // pool.exec returns one message object per row; the actual row is in `.row`.
-  const res = await pool.exec(sql, params, { rowMode: "object" });
-  return res.map((m) => m.row).filter(Boolean);
+function q(sql, params = []) {
+  // In-memory query; returns an array of {column: value} row objects.
+  return sdb.selectObjects(sql, params);
 }
 
 // ---------- query building (mirrors search.py:_build_filter_sql) ----------
@@ -378,7 +389,7 @@ function setActiveNav(route) {
 }
 
 async function route() {
-  if (!pool) return;
+  if (!sdb) return;
   const h = location.hash.replace(/^#\/?/, "");
   const [r, ...rest] = h.split("/");
   const arg = rest.map(decodeURIComponent).join("/");
@@ -405,6 +416,40 @@ async function route() {
 
 // ---------- init ----------
 
+async function loadDatabase(sqlite3) {
+  // One-time download of the whole DB (gzip-encoded on the wire, ~7.7 MB), then
+  // deserialize into an in-memory database. Every subsequent query is local.
+  const url = new URL(CFG.dbUrl, location.href).href;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} fetching the database`);
+
+  // Stream so we can show download progress (Content-Length is the *compressed*
+  // size; the body arrives already-decompressed, so report MB, not a percentage).
+  const reader = resp.body.getReader();
+  const chunks = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    statusEl.textContent = `Loading database… ${(received / 1e6).toFixed(1)} MB`;
+  }
+  const bytes = new Uint8Array(received);
+  let off = 0;
+  for (const c of chunks) { bytes.set(c, off); off += c.length; }
+
+  const p = sqlite3.wasm.alloc(bytes.length);
+  sqlite3.wasm.heap8u().set(bytes, p);
+  const db = new sqlite3.oo1.DB();
+  const rc = sqlite3.capi.sqlite3_deserialize(
+    db.pointer, "main", p, bytes.length, bytes.length,
+    sqlite3.capi.SQLITE_DESERIALIZE_FREEONCLOSE,
+  );
+  if (rc) throw new Error(`sqlite3_deserialize failed (rc=${rc})`);
+  return db;
+}
+
 async function init() {
   try {
     CFG = await (await fetch("config.json")).json();
@@ -416,15 +461,10 @@ async function init() {
   buildFilterUI();
 
   try {
-    // One worker is plenty for an interactive fan site. httpOptions.maxPageSize
-    // must be >= the DB's actual page size.
-    pool = await createSQLiteHTTPPool({
-      workers: 1,
-      httpOptions: { maxPageSize: CFG.maxPageSize || 4096, cacheSize: CFG.cacheSize || 4096 },
-    });
-    await pool.open(new URL(CFG.dbUrl, location.href).href);
+    const sqlite3 = await sqlite3InitModule();
+    sdb = await loadDatabase(sqlite3);
   } catch (err) {
-    statusEl.textContent = "Failed to open the database. Check that site.db is reachable and the host serves byte ranges with CORS. " + (err.message || err);
+    statusEl.textContent = "Failed to load the database. Check that it is reachable (and CORS-enabled if cross-origin). " + (err.message || err);
     return;
   }
 

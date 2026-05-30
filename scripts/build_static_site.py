@@ -2,9 +2,9 @@
 """Build the static SopranosDB site bundle into ``dist/``.
 
 The deployed site is fully static: a Vite-built front-end + the official SQLite
-WASM engine (via ``sqlite-wasm-http``) that runs the FTS5 + facet SQL in the
-browser against a read-only ``.db`` fetched with HTTP range requests. No app
-server, no LLM, no ML model at request time.
+WASM engine (``@sqlite.org/sqlite-wasm``). The read-only ``.db`` is downloaded
+once (gzip-compressed) and queried in memory, so the FTS5 + facet SQL runs in
+the browser with zero per-query network. No app server, no LLM, no ML model.
 
 This script:
   1. builds the front-end with Vite (npm install + vite build) — emits the app
@@ -47,9 +47,9 @@ from sopranos.config import (
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STATIC_SRC = REPO_ROOT / "sopranos" / "web" / "static_site"
 
-# sqlite-wasm-http recommends a 1024-byte page so each HTTP range request
-# transfers less dead weight. Must be <= the client's httpOptions.maxPageSize.
-PAGE_SIZE = 1024
+# The DB is downloaded whole and queried in memory (no range requests), so page
+# size only affects the on-disk file a little. 4096 is SQLite's default.
+PAGE_SIZE = 4096
 
 # Columns copied into the trimmed scenes table. raw_vlm_json is intentionally
 # dropped (debug-only blob); everything FTS indexes or the UI shows is kept.
@@ -168,8 +168,6 @@ def write_config_json(out: Path, db_url: str, keyframe_base: str) -> None:
     config = {
         "dbUrl": db_url,
         "keyframeBase": keyframe_base.rstrip("/"),
-        "maxPageSize": PAGE_SIZE,
-        "cacheSize": 4096,
     }
     (out / "config.json").write_text(json.dumps(config, indent=2) + "\n")
     print(f"  config.json: dbUrl={db_url}")
@@ -190,14 +188,17 @@ def link_keyframes(out: Path) -> None:
 
 
 def print_deploy_notes(out: Path, db_url: str, keyframe_base: str) -> None:
+    db = out / "site.db"
     print("\nDeploy:")
-    print(f"  1. Keyframes -> object storage (preserve <EP>/keyframes/<file> layout):")
+    print(f"  1. Keyframes -> R2 (preserve <EP>/keyframes/<file> layout):")
     print(f"       python scripts/upload_keyframes_r2.py")
-    print(f"  2. site.db -> object storage (needs CORS: allow GET+Range from the site origin,")
-    print(f"     expose Accept-Ranges/Content-Range/Content-Length). No per-file size limit on R2.")
-    print(f"       npx wrangler r2 object put $R2_BUCKET/site.db --file {out/'site.db'} --remote")
-    print(f"  3. Static bundle -> Cloudflare Pages / Netlify / GitHub Pages (exclude site.db, which is on R2):")
-    print(f"       rm {out/'site.db'}; npx wrangler pages deploy {out} --project-name sopranosdb")
+    print(f"  2. site.db -> R2, gzip-compressed (the browser downloads it whole, once, and")
+    print(f"     auto-decompresses). Needs CORS (GET) from the site origin:")
+    print(f"       gzip -9 -c {db} > /tmp/site.db.gz")
+    print(f"       npx wrangler r2 object put $R2_BUCKET/site.db --file /tmp/site.db.gz \\")
+    print(f"           --content-type application/x-sqlite3 --content-encoding gzip --remote")
+    print(f"  3. Static bundle -> Cloudflare Pages (exclude site.db, which is on R2):")
+    print(f"       rm {db}; npx wrangler pages deploy {out} --project-name sopranosdb")
     print(f"  Front-end URLs come from config.json (no JS rebuild needed to re-point):")
     print(f"     dbUrl={db_url!r}, keyframeBase={keyframe_base!r}")
 

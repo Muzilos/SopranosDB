@@ -95,12 +95,21 @@ def _qf_drop(qf: QueryFilter, field: str) -> QueryFilter:
     return QueryFilter(**data)
 
 
+# Common English words carry no signal but blow up the FTS scan (they match
+# nearly every scene), so drop them from the MATCH. Mirrors STOPWORDS in main.js.
+_STOPWORDS = frozenset(
+    "a an and are as at be been but by for from had has have he her his in into is it its "
+    "of on or that the their them they this to was were what when which who will with you".split()
+)
+
+
 def _fts_match_expr(text: str) -> str | None:
-    """Turn free text into an FTS5 MATCH expression. Each alphanumeric token is
-    quoted (so punctuation/apostrophes can't break the query) and OR-joined for
-    recall; bm25() then ranks by how well each scene matches."""
-    toks = re.findall(r"[A-Za-z0-9']+", text or "")
-    toks = [t for t in toks if t]
+    """Turn free text into an FTS5 MATCH expression. Stopwords are dropped, each
+    remaining token is quoted (so punctuation/apostrophes can't break the query)
+    and OR-joined for recall; bm25() then ranks by how well each scene matches."""
+    toks = [t for t in re.findall(r"[A-Za-z0-9']+", text or "") if t]
+    content = [t for t in toks if t.lower() not in _STOPWORDS]
+    toks = content or toks  # all-stopword query: fall back to as-typed
     if not toks:
         return None
     return " OR ".join(f'"{t}"' for t in toks)

@@ -65,15 +65,18 @@ sopranos qa sample --n 20                  # random scenes for manual review
 
 The deployed product is fully static. Search and browse run client-side:
 
-- **Engine:** [`sqlite-wasm-http`](https://github.com/mmomtchev/sqlite-wasm-http)
-  — the **official SQLite WASM** build plus an HTTP-range VFS, bundled by Vite.
-  The browser opens the hosted `site.db` and fetches **only the pages each query
-  touches** (a few hundred KB), not the whole file. (We previously used
-  `sql.js-httpvfs`, but its bundled SQLite is 3.35 and mishandled some FTS5
-  queries; the official engine is current and maintained.)
+- **Engine:** the **official SQLite WASM** build
+  ([`@sqlite.org/sqlite-wasm`](https://sqlite.org/wasm)), bundled by Vite. The
+  browser **downloads the whole DB once** (gzip-compressed, ~7.7 MB on the wire),
+  deserializes it into an in-memory database, and runs every query locally — so
+  after the initial load there is **zero per-query network**. (Earlier iterations
+  used `sql.js-httpvfs` and then `sqlite-wasm-http` to fetch DB pages on demand
+  via HTTP range requests; for a DB this small that meant many MB across many
+  requests *per query*, so a one-time download is both simpler and much faster.)
 - **Search:** SQLite **FTS5** over summaries / transcripts / dialogue, ranked
-  with `bm25()`. Structured filters become hard SQL `WHERE` clauses (same logic
-  as `sopranos/query/search.py`, ported to JS in `src/main.js`).
+  with `bm25()` (common stopwords are dropped from the match). Structured filters
+  become hard SQL `WHERE` clauses — same logic as `sopranos/query/search.py`,
+  mirrored in `src/main.js`.
 - **Browse:** hash-routed, shareable URLs — `#/episode/S01E01`,
   `#/character/Tony%20Soprano`, `#/location/<type>`, `#/scene/<id>`.
 - **Results show keyframes + transcript + metadata only** — no video playback
@@ -86,31 +89,29 @@ runs `npm install` + `vite build`, then assembles `dist/`:
 ```
 dist/
 ├── index.html                  Vite entry (references the hashed bundle)
-├── assets/                      app bundle + SQLite worker chunks + sqlite3-*.wasm (~3.6 MB)
+├── assets/                      app bundle + sqlite3-*.wasm (~865 KB)
 ├── config.json                 runtime config (db url, keyframe base) — fetched at startup
 ├── filters.json                facet vocab (characters, locations, moods, ...)
-├── site.db                     trimmed read-only DB (~23 MB)
+├── site.db                     trimmed read-only DB (~22 MB; gzips to ~7.7 MB)
 └── artifacts -> <ARTIFACTS_DIR> symlink so `sopranos serve` shows keyframes locally
 ```
 
 `site.db` is the production DB minus what the site doesn't need: the vector
-table, `api_usage`, `shots`, and the `raw_vlm_json` blob are dropped; page size
-is **1024** (smaller pages = less waste per range request, per the library's
-recommendation) and `journal_mode=DELETE` (WAL can't be served read-only).
-57 MB → ~23 MB.
+table, `api_usage`, `shots`, and the `raw_vlm_json` blob are dropped;
+`journal_mode=DELETE` (WAL can't be served read-only). 57 MB → ~22 MB → ~7.7 MB
+gzipped. Because the DB is fetched whole (no range requests), it's served from R2
+with `Content-Encoding: gzip` and the browser decompresses it transparently.
 
 Putting the URLs in `config.json` (not the JS bundle) means a redeploy can
 re-point the DB/keyframes to a new host **without** an `npm`/Vite rebuild.
 
-`sopranos serve` is a small **Range-capable** static server (the stdlib one
-ignores `Range`); it mimics how a real static host behaves so the WASM engine
-works locally. For a fully local preview, build with the defaults
-(`--db-url site.db --keyframe-base artifacts`) so it reads the bundled `site.db`
-and the `artifacts/` symlink instead of R2.
+`sopranos serve` is a small static server for local preview. For a fully local
+preview, build with the defaults (`--db-url site.db --keyframe-base artifacts`)
+so it reads the bundled `site.db` and the `artifacts/` symlink instead of R2.
+(It still serves byte ranges, which is harmless here — the DB is fetched whole.)
 
-> No `SharedArrayBuffer` / COOP-COEP headers are required: the engine
-> auto-falls back to a synchronous HTTP backend. (That also avoids having to add
-> cross-origin-resource headers to every R2 keyframe.)
+> No `SharedArrayBuffer` / COOP-COEP headers are needed: the DB lives in normal
+> WASM memory, not OPFS, so the engine runs single-threaded on the main thread.
 
 ## Deploy to Cloudflare ($0 tier)
 
@@ -138,9 +139,9 @@ R2_PUBLIC_BASE=https://pub-xxxxxxxx.r2.dev   # bucket public URL (after enabling
 ### 2. One-time bucket setup
 
 Create the bucket, enable its public `r2.dev` URL, and set CORS so the browser
-may fetch `site.db` with `Range` cross-origin (keyframes load via `<img>` and
-need no CORS). `wrangler` expects Cloudflare's `{rules: [...]}` schema (**not**
-the S3 `[...]` array):
+may fetch `site.db` cross-origin (keyframes load via `<img>` and need no CORS).
+`wrangler` expects Cloudflare's `{rules: [...]}` schema (**not** the S3 `[...]`
+array):
 
 ```bash
 npx wrangler r2 bucket create "$R2_BUCKET"
@@ -148,8 +149,8 @@ npx wrangler r2 bucket dev-url enable "$R2_BUCKET"   # the pub-xxxx.r2.dev URL
 
 cat > /tmp/r2-cors.json <<'JSON'
 { "rules": [ {
-  "allowed": { "origins": ["*"], "methods": ["GET","HEAD"], "headers": ["range","content-type"] },
-  "exposeHeaders": ["Content-Range","Content-Length","Accept-Ranges","ETag"],
+  "allowed": { "origins": ["*"], "methods": ["GET","HEAD"], "headers": ["content-type"] },
+  "exposeHeaders": ["Content-Length","ETag"],
   "maxAgeSeconds": 3600
 } ] }
 JSON
@@ -164,9 +165,11 @@ python scripts/build_static_site.py \
     --db-url "$R2_PUBLIC_BASE/site.db" \
     --keyframe-base "$R2_PUBLIC_BASE"
 
-# Upload the DB and the ~25k keyframes to R2:
-npx wrangler r2 object put "$R2_BUCKET/site.db" --file dist/site.db \
-    --content-type application/x-sqlite3 --remote
+# Upload the DB gzip-compressed (browser downloads it whole, once, and
+# auto-decompresses) + the ~25k keyframes:
+gzip -9 -c dist/site.db > /tmp/site.db.gz
+npx wrangler r2 object put "$R2_BUCKET/site.db" --file /tmp/site.db.gz \
+    --content-type application/x-sqlite3 --content-encoding gzip --remote
 python scripts/upload_keyframes_r2.py          # parallel, resumable; skips existing
 
 # Deploy the Vite bundle to Pages (drop site.db — it's served from R2):
