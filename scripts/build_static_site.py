@@ -173,24 +173,24 @@ def vite_build(out: Path, skip_install: bool) -> None:
     print(f"  front-end: index.html + {len(assets)} bundled assets (app, SQLite worker, .wasm)")
 
 
-def write_config_json(out: Path, db_url: str, keyframe_base: str,
+def write_config_json(out: Path, api_base: str, keyframe_base: str,
                       support: list | None = None) -> None:
     """Runtime config the front-end fetches at startup. Keeping the URLs out of
-    the JS bundle means a redeploy can re-point the DB/keyframes without rebuilding.
+    the JS bundle means a redeploy can re-point the query API / keyframes without
+    rebuilding.
 
-    ``support`` (optional) is a list of donation-method objects; when present it
-    OVERRIDES the front-end's built-in DEFAULT_SUPPORT list, so live donation
-    handles can be changed without a JS rebuild too. Omitted when None/empty, in
-    which case the baked-in defaults (edit them in src/main.js) are used."""
+    ``apiBase`` is the Cloudflare Worker that serves the search/browse/view API
+    (backed by D1). ``support`` (optional) overrides the front-end's built-in
+    donation-method list."""
     config = {
-        "dbUrl": db_url,
+        "apiBase": api_base.rstrip("/"),
         "keyframeBase": keyframe_base.rstrip("/"),
     }
     if support:
         config["support"] = support
     (out / "config.json").write_text(json.dumps(config, indent=2) + "\n")
     extra = f", support={len(support)} method(s)" if support else ""
-    print(f"  config.json: dbUrl={db_url}{extra}")
+    print(f"  config.json: apiBase={api_base}{extra}")
 
 
 def link_keyframes(out: Path) -> None:
@@ -207,28 +207,29 @@ def link_keyframes(out: Path) -> None:
         print(f"  (skipped keyframe symlink: {ARTIFACTS_DIR} not found)")
 
 
-def print_deploy_notes(out: Path, db_url: str, keyframe_base: str) -> None:
+def print_deploy_notes(out: Path, api_base: str, keyframe_base: str) -> None:
     db = out / "site.db"
-    print("\nDeploy:")
+    print("\nDeploy (D1-backed; the browser no longer downloads site.db):")
     print(f"  1. Keyframes -> R2 (preserve <EP>/keyframes/<file> layout):")
     print(f"       python scripts/upload_keyframes_r2.py")
-    print(f"  2. site.db -> R2, gzip-compressed (the browser downloads it whole, once, and")
-    print(f"     auto-decompresses). Needs CORS (GET) from the site origin:")
-    print(f"       gzip -9 -c {db} > /tmp/site.db.gz")
-    print(f"       npx wrangler r2 object put $R2_BUCKET/site.db --file /tmp/site.db.gz \\")
-    print(f"           --content-type application/x-sqlite3 --content-encoding gzip --remote")
-    print(f"  3. Static bundle -> Cloudflare Pages (exclude site.db, which is on R2):")
-    print(f"       rm {db}; npx wrangler pages deploy {out} --project-name sopranosdb")
+    print(f"  2. Load the corpus into D1 (regenerates the API's data):")
+    print(f"       python scripts/load_d1.py")
+    print(f"       cd worker && npx wrangler d1 execute sopranosdb --remote --file ../dist/d1_load.sql")
+    print(f"  3. Deploy the query Worker (set ALLOWED_ORIGIN in worker/wrangler.toml):")
+    print(f"       cd worker && npx wrangler deploy")
+    print(f"  4. Static bundle -> Cloudflare Pages (site.db is NOT shipped — it's only")
+    print(f"     the source for step 2):")
+    print(f"       rm -f {db} {out / 'd1_load.sql'}; npx wrangler pages deploy {out} --project-name sopranosdb")
     print(f"  Front-end URLs come from config.json (no JS rebuild needed to re-point):")
-    print(f"     dbUrl={db_url!r}, keyframeBase={keyframe_base!r}")
+    print(f"     apiBase={api_base!r}, keyframeBase={keyframe_base!r}")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Build the static SopranosDB site bundle.")
     ap.add_argument("--out", default=str(REPO_ROOT / "dist"), help="output directory")
     ap.add_argument("--source-db", default=str(DB_PATH), help="source sopranos.db")
-    ap.add_argument("--db-url", default="site.db",
-                    help="URL the browser fetches the DB from (default: same-origin site.db)")
+    ap.add_argument("--api-url", default="https://sopranosdb-api.smm321.workers.dev",
+                    help="base URL of the D1-backed query Worker (written to config.json as apiBase)")
     ap.add_argument("--keyframe-base", default="artifacts",
                     help="base URL for keyframe images (default: local artifacts symlink)")
     ap.add_argument("--top-tags", type=int, default=40, help="how many top activities/topics to expose")
@@ -267,10 +268,10 @@ def main() -> None:
     vite_build(out, skip_install=args.skip_install)
     build_site_db(Path(args.source_db), out / "site.db", view_counts)
     write_filters_json(out / "site.db", out / "filters.json", args.top_tags)
-    write_config_json(out, args.db_url, args.keyframe_base, support)
+    write_config_json(out, args.api_url, args.keyframe_base, support)
     if not args.no_link_keyframes:
         link_keyframes(out)
-    print_deploy_notes(out, args.db_url, args.keyframe_base)
+    print_deploy_notes(out, args.api_url, args.keyframe_base)
     print("\nPreview: sopranos serve   (then open http://127.0.0.1:8000)")
 
 

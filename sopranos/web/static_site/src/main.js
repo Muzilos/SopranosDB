@@ -1,16 +1,12 @@
-// SopranosDB static front-end. Runs FTS5 keyword search + structured-facet
-// filtering entirely in the browser. The read-only SQLite DB (~23 MB, served
-// gzip-compressed to ~7.7 MB) is downloaded ONCE and queried in memory — so
-// every query after the initial load is instant, with zero network. No app
-// server, no LLM, no embeddings.
-//
-// Engine: the official SQLite WASM build (@sqlite.org/sqlite-wasm), bundled by
-// Vite (the .wasm is emitted as a hashed asset).
+// SopranosDB front-end. Search + browse run against a Cloudflare Worker backed by
+// a D1 (SQLite) database: FTS5 keyword search, facet SQL, and the live "Popularity"
+// view counts all execute server-side, and the browser just renders the small JSON
+// responses. (The old design downloaded the whole ~22 MB DB and queried it in
+// memory via sqlite-wasm; that's gone — purgeLegacyClientData cleans up after it.)
 
-import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
 import "./style.css";
 
-let CFG = {};        // config.json (dbUrl, keyframeBase)
+let CFG = {};        // config.json (apiBase, keyframeBase)
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 
@@ -19,7 +15,6 @@ const resultsEl = $("#results");
 const lightbox = $("#lightbox");
 const lightboxImg = $("#lightbox-img");
 
-let sdb = null;      // in-memory sqlite3.oo1.DB
 let OPTIONS = {};    // filters.json
 let LAST_ROWS = [];  // current top-N-by-relevance result set, for instant client re-sort
 
@@ -46,27 +41,29 @@ function keyframeUrls(json, season, episode) {
   return arr.map((p) => `${CFG.keyframeBase}/${code}/keyframes/${String(p).split("/").pop()}`);
 }
 
-// Common English words carry no signal but blow up the FTS scan (they match
-// nearly every scene), so drop them from the MATCH. Mirrors search.py.
-const STOPWORDS = new Set(
-  ("a an and are as at be been but by for from had has have he her his in into is it its " +
-   "of on or that the their them they this to was were what when which who will with you")
-    .split(" "),
-);
-
-// Free text -> FTS5 MATCH expression: drop stopwords, quote each remaining token
-// (so punctuation can't break the query), OR-join for recall; bm25() ranks.
-function ftsMatch(text) {
-  let toks = (text || "").match(/[A-Za-z0-9']+/g) || [];
-  const content = toks.filter((t) => !STOPWORDS.has(t.toLowerCase()));
-  toks = content.length ? content : toks; // all-stopword query: fall back to as-typed
-  if (!toks.length) return null;
-  return toks.map((t) => `"${t}"`).join(" OR ");
+// All query SQL (FTS5/bm25, facet filtering, stopwords, character attachment) now
+// runs in the Worker; the client just calls the API and renders the JSON it gets.
+async function api(path, params) {
+  const base = (CFG.apiBase || "").replace(/\/$/, "");
+  const url = new URL(base + path);
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v != null && v !== "") url.searchParams.set(k, String(v));
+    }
+  }
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`API ${resp.status}`);
+  return resp.json();
 }
 
-function q(sql, params = []) {
-  // In-memory query; returns an array of {column: value} row objects.
-  return sdb.selectObjects(sql, params);
+// Fire-and-forget view ping (powers the live Popularity counts). The Worker
+// applies the anti-bot checks and dedupes per visitor/day; the client only pings
+// once per scene per day (see VIEWED) so we don't hammer the endpoint.
+function pingView(id) {
+  const base = (CFG.apiBase || "").replace(/\/$/, "");
+  try {
+    fetch(`${base}/api/view/${encodeURIComponent(id)}`, { method: "POST", keepalive: true }).catch(() => {});
+  } catch { /* ignore */ }
 }
 
 // ---------- support / donate config ----------
@@ -113,88 +110,16 @@ function supportMethods() {
   return list.filter(supportIsLive);
 }
 
-// ---------- query building (mirrors search.py:_build_filter_sql) ----------
+// ---------- search ----------
 
-function buildFacetSql(f) {
-  const where = [], params = [];
-  if (f.location_types?.length) {
-    where.push(`s.location_type IN (${f.location_types.map(() => "?").join(",")})`);
-    params.push(...f.location_types);
-  }
-  if (f.location_interior_exterior) { where.push("s.location_interior_exterior = ?"); params.push(f.location_interior_exterior); }
-  if (f.time_of_day) { where.push("s.time_of_day = ?"); params.push(f.time_of_day); }
-  if (f.mood) { where.push("s.mood = ?"); params.push(f.mood); }
-  if (f.violence_level) { where.push("s.violence_level = ?"); params.push(f.violence_level); }
-  if (f.min_group_size != null) { where.push("s.group_size_total >= ?"); params.push(f.min_group_size); }
-  if (f.max_group_size != null) { where.push("s.group_size_total <= ?"); params.push(f.max_group_size); }
-  for (const ch of f.required_characters || []) {
-    where.push("EXISTS (SELECT 1 FROM scene_characters sc WHERE sc.scene_id=s.id AND sc.character_name=? AND sc.uncertain=0)");
-    params.push(ch);
-  }
-  for (const ch of f.excluded_characters || []) {
-    where.push("NOT EXISTS (SELECT 1 FROM scene_characters sc WHERE sc.scene_id=s.id AND sc.character_name=?)");
-    params.push(ch);
-  }
-  for (const [kind, vals] of [["activity", f.activities], ["topic", f.topics]]) {
-    for (const v of vals || []) {
-      where.push("EXISTS (SELECT 1 FROM scene_tags st WHERE st.scene_id=s.id AND st.tag_type=? AND st.tag_value=?)");
-      params.push(kind, v.toLowerCase().trim());
-    }
-  }
-  return [where.length ? where.join(" AND ") : "1=1", params];
-}
-
-const SCENE_COLS = `s.id, s.scene_index, s.start_s, s.end_s, s.summary, s.location_name,
-  s.location_type, s.time_of_day, s.mood, s.violence_level, s.group_size_total,
-  s.dialogue_highlight, s.transcript_text, s.keyframes_json, s.view_count,
-  e.season, e.episode, e.title`;
-
-async function attachCharacters(rows) {
-  if (!rows.length) return;
-  const ids = rows.map((r) => r.id);
-  const ph = ids.map(() => "?").join(",");
-  const cr = await q(
-    `SELECT scene_id, character_name FROM scene_characters WHERE uncertain=0 AND scene_id IN (${ph})`,
-    ids,
-  );
-  const byId = {};
-  for (const r of cr) (byId[r.scene_id] ||= []).push(r.character_name);
-  for (const r of rows) r.characters = byId[r.id] || [];
-}
-
-// Chronological (air) order — the DB's default ranking when there's no keyword
-// query, and the tiebreak for the client-side secondary sorts.
-const CHRONO = "e.season, e.episode, s.scene_index";
-
-// The DB always returns the top-N by RELEVANCE: bm25 when there's a keyword
-// query, chronological when the box is empty (relevance has nothing to rank by).
-// The user-chosen sort (newest / oldest / popularity) is NOT pushed into SQL —
-// otherwise "newest" would rank the whole corpus by date and ignore the search.
-// Instead we fetch the top-N relevant rows here and reorder them with sortRows().
+// Ask the Worker for the top-N scenes by RELEVANCE (bm25 when there's a keyword
+// query, chronological when the box is empty). The user-chosen sort
+// (newest / oldest / popularity) is applied to that set on the client by sortRows
+// — it must NOT change what the DB selects, or "newest" would just rank the whole
+// corpus by date and ignore the search. Facets ride along as one JSON `f` param;
+// the Worker turns them back into the same EXISTS/IN filter SQL as before.
 async function runSearch(text, f, top) {
-  const [where, params] = buildFacetSql(f);
-  const match = ftsMatch(text);
-  let sql, args;
-  if (match) {
-    // `rank` is FTS5's reserved special column — never alias to it. Drive off the
-    // FTS table so MATCH/bm25 bind cleanly across SQLite versions.
-    sql = `SELECT ${SCENE_COLS}, bm25(scenes_fts) AS bm25_score
-           FROM scenes_fts
-           JOIN scenes s ON s.id = scenes_fts.rowid
-           JOIN episodes e ON e.id = s.episode_id
-           WHERE scenes_fts MATCH ? AND ${where}
-           ORDER BY bm25_score, ${CHRONO} LIMIT ?`;
-    args = [match, ...params, top];
-  } else {
-    sql = `SELECT ${SCENE_COLS}, 0.0 AS bm25_score
-           FROM scenes s JOIN episodes e ON e.id = s.episode_id
-           WHERE ${where}
-           ORDER BY ${CHRONO} LIMIT ?`;
-    args = [...params, top];
-  }
-  const rows = await q(sql, args);
-  await attachCharacters(rows);
-  return rows;
+  return api("/api/search", { q: text, top, f: JSON.stringify(f) });
 }
 
 // Reorder an already-fetched (top-N-by-relevance) result set on the client, so
@@ -230,7 +155,7 @@ function renderScene(h) {
   const keyframes = keyframeUrls(h.keyframes_json, h.season, h.episode)
     .map((url) => `<img src="${esc(url)}" data-full="${esc(url)}" loading="lazy" decoding="async" alt="" />`).join("");
   return `
-    <div class="result">
+    <div class="result" data-scene-id="${h.id}">
       <div class="result-head">
         <div>
           <a class="ep" href="#/episode/${code}">${code}</a> ${esc(h.title)}
@@ -253,6 +178,7 @@ function renderScenes(rows, headingHtml = "") {
   }
   resultsEl.innerHTML = headingHtml + rows.map(renderScene).join("");
   bindKeyframes();
+  observeScenes();
 }
 
 function bindKeyframes() {
@@ -261,6 +187,58 @@ function bindKeyframes() {
       lightboxImg.src = img.dataset.full;
       lightbox.classList.add("show");
     });
+  });
+}
+
+// ---------- view tracking (live Popularity signal) ----------
+//
+// A scene counts as "viewed" once it has been on screen (≥50% visible) for a
+// short dwell — not on mere render/scroll-past, which keeps drive-by impressions
+// and prefetchers out. We also ping each scene at most once per day per browser
+// (VIEWED, day-scoped) so reloads don't spam the endpoint; the Worker does the
+// authoritative per-visitor/day dedupe and anti-bot filtering server-side.
+const VIEW_DWELL_MS = 2000;
+const VIEWED = loadViewed();   // scene ids already pinged today (this browser)
+let viewObserver = null;
+
+function loadViewed() {
+  try {
+    const o = JSON.parse(localStorage.getItem("sdb_viewed") || "{}");
+    const day = new Date().toISOString().slice(0, 10);
+    return new Set(o.day === day ? o.ids : []);
+  } catch { return new Set(); }
+}
+function rememberViewed(id) {
+  VIEWED.add(String(id));
+  try {
+    const day = new Date().toISOString().slice(0, 10);
+    localStorage.setItem("sdb_viewed", JSON.stringify({ day, ids: [...VIEWED].slice(-4000) }));
+  } catch { /* storage full / blocked — fine, we just re-ping next load */ }
+}
+
+function setupViewTracking() {
+  if (!("IntersectionObserver" in window)) return; // graceful no-op
+  viewObserver = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      const el = e.target;
+      if (e.isIntersecting) {
+        if (el._viewTimer) continue;
+        el._viewTimer = setTimeout(() => {
+          const id = el.dataset.sceneId;
+          if (id && !VIEWED.has(id)) { rememberViewed(id); pingView(id); }
+          viewObserver.unobserve(el);
+        }, VIEW_DWELL_MS);
+      } else if (el._viewTimer) {
+        clearTimeout(el._viewTimer); el._viewTimer = null; // left the viewport before dwell elapsed
+      }
+    }
+  }, { threshold: 0.5 });
+}
+
+function observeScenes() {
+  if (!viewObserver) return;
+  $$(".result[data-scene-id]").forEach((el) => {
+    if (!VIEWED.has(el.dataset.sceneId)) viewObserver.observe(el);
   });
 }
 
@@ -501,7 +479,7 @@ async function doSearch() {
 
 async function viewEpisodes() {
   statusEl.textContent = "Episodes";
-  const eps = await q("SELECT season, episode, title FROM episodes ORDER BY season, episode");
+  const eps = await api("/api/episodes");
   const bySeason = {};
   for (const e of eps) (bySeason[e.season] ||= []).push(e);
   let html = "";
@@ -518,9 +496,7 @@ async function viewEpisodes() {
 
 async function viewCharacters() {
   statusEl.textContent = "Characters";
-  const counts = await q(
-    "SELECT character_name, COUNT(*) AS c FROM scene_characters WHERE uncertain=0 GROUP BY character_name"
-  );
+  const counts = await api("/api/characters");
   const byName = {};
   for (const r of counts) byName[r.character_name] = r.c;
   const names = (OPTIONS.characters || []).slice().sort();
@@ -533,41 +509,27 @@ async function viewCharacters() {
 async function viewEpisode(code) {
   const m = /^S(\d{2})E(\d{2})$/.exec(code || "");
   if (!m) { resultsEl.innerHTML = `<div class="empty">Bad episode code.</div>`; return; }
-  const season = parseInt(m[1], 10), episode = parseInt(m[2], 10);
   statusEl.textContent = `Episode ${code}`;
-  const rows = await q(
-    `SELECT ${SCENE_COLS}, 0.0 AS bm25_score FROM scenes s JOIN episodes e ON e.id=s.episode_id
-     WHERE e.season=? AND e.episode=? ORDER BY s.scene_index`, [season, episode]);
-  await attachCharacters(rows);
+  const rows = await api(`/api/episode/${code}`);
   const title = rows[0] ? esc(rows[0].title) : "";
   renderScenes(rows, `<div class="season-head">${code} — ${title} · ${rows.length} scenes</div>`);
 }
 
 async function viewCharacter(name) {
   statusEl.textContent = `Character: ${name}`;
-  const rows = await q(
-    `SELECT ${SCENE_COLS}, 0.0 AS bm25_score FROM scenes s JOIN episodes e ON e.id=s.episode_id
-     WHERE EXISTS (SELECT 1 FROM scene_characters sc WHERE sc.scene_id=s.id AND sc.character_name=? AND sc.uncertain=0)
-     ORDER BY e.season, e.episode, s.scene_index LIMIT 400`, [name]);
-  await attachCharacters(rows);
+  const rows = await api(`/api/character/${encodeURIComponent(name)}`);
   renderScenes(rows, `<div class="season-head">${esc(name)} · ${rows.length} scenes${rows.length === 400 ? " (showing first 400)" : ""}</div>`);
 }
 
 async function viewLocation(type) {
   statusEl.textContent = `Location: ${type}`;
-  const rows = await q(
-    `SELECT ${SCENE_COLS}, 0.0 AS bm25_score FROM scenes s JOIN episodes e ON e.id=s.episode_id
-     WHERE s.location_type=? ORDER BY e.season, e.episode, s.scene_index LIMIT 400`, [type]);
-  await attachCharacters(rows);
+  const rows = await api(`/api/location/${encodeURIComponent(type)}`);
   renderScenes(rows, `<div class="season-head">${esc(type)} · ${rows.length} scenes${rows.length === 400 ? " (showing first 400)" : ""}</div>`);
 }
 
 async function viewScene(id) {
   statusEl.textContent = `Scene ${id}`;
-  const rows = await q(
-    `SELECT ${SCENE_COLS}, 0.0 AS bm25_score FROM scenes s JOIN episodes e ON e.id=s.episode_id WHERE s.id=?`,
-    [parseInt(id, 10)]);
-  await attachCharacters(rows);
+  const rows = await api(`/api/scene/${encodeURIComponent(id)}`);
   renderScenes(rows, "");
 }
 
@@ -667,13 +629,6 @@ async function route() {
   const searchVisible = r === "";
   $("#search-form").style.display = searchVisible ? "" : "none";
   $("#filters").style.display = searchVisible ? "" : "none";
-  // Support/donate needs no database — render it immediately, even while the
-  // DB is still downloading. Every other view queries sdb, so gate those.
-  if (r === "support") {
-    try { viewSupport(); } catch (err) { statusEl.textContent = `Error: ${err.message || err}`; }
-    return;
-  }
-  if (!sdb) return;
   try {
     switch (r) {
       case "": return doSearch();
@@ -694,54 +649,33 @@ async function route() {
 
 // ---------- init ----------
 
-async function loadDatabase(sqlite3) {
-  // One-time download of the whole DB (compressed on the wire — br/gzip, ~7 MB —
-  // and decompressed transparently by the browser), then deserialize into an
-  // in-memory database. Every subsequent query is local; nothing is persisted to
-  // disk (no OPFS / IndexedDB / localStorage), so the only client footprint is
-  // this RAM copy plus whatever the browser keeps in its HTTP cache.
-  const url = new URL(CFG.dbUrl, location.href).href;
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`HTTP ${resp.status} fetching the database`);
-
-  // Stream so we can show download progress (Content-Length is the *compressed*
-  // size; the body arrives already-decompressed, so report MB, not a percentage).
-  const reader = resp.body.getReader();
-  const chunks = [];
-  let received = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    received += value.length;
-    statusEl.textContent = `Loading database… ${(received / 1e6).toFixed(1)} MB`;
-  }
-
-  // Copy the chunks straight into the WASM heap, releasing each one as we go,
-  // instead of first assembling a separate contiguous Uint8Array. That avoids a
-  // second full-size (~22 MB) JS buffer, cutting the peak load-time memory from
-  // ~3× to ~2× the DB size. alloc() may grow (and detach) the heap, so take the
-  // heap8u() view *after* allocating.
-  const p = sqlite3.wasm.alloc(received);
-  const heap = sqlite3.wasm.heap8u();
-  let off = 0;
-  for (let i = 0; i < chunks.length; i++) {
-    heap.set(chunks[i], p + off);
-    off += chunks[i].length;
-    chunks[i] = null; // drop the reference so the GC can reclaim it now
-  }
-  chunks.length = 0;
-
-  const db = new sqlite3.oo1.DB();
-  const rc = sqlite3.capi.sqlite3_deserialize(
-    db.pointer, "main", p, received, received,
-    sqlite3.capi.SQLITE_DESERIALIZE_FREEONCLOSE,
-  );
-  if (rc) throw new Error(`sqlite3_deserialize failed (rc=${rc})`);
-  return db;
+// One-time purge of whatever the OLD (download-the-whole-DB) build may have left
+// on a returning visitor's machine. The ~22 MB site.db and the SQLite WASM lived
+// in the browser's HTTP cache, which scripts can't evict directly — but the new
+// build never requests them again, so they're orphaned and the browser reclaims
+// them on its own. What IS script-clearable we clear here: Cache Storage,
+// IndexedDB (any OPFS/idb the engine created), and stray service workers. Guarded
+// by a localStorage flag so it runs at most once per browser.
+async function purgeLegacyClientData() {
+  if (localStorage.getItem("sdb_purged_v2")) return;
+  try {
+    if (navigator.serviceWorker?.getRegistrations) {
+      for (const reg of await navigator.serviceWorker.getRegistrations()) await reg.unregister();
+    }
+    if (window.caches?.keys) {
+      for (const key of await caches.keys()) await caches.delete(key);
+    }
+    if (indexedDB?.databases) {
+      for (const db of await indexedDB.databases()) if (db.name) indexedDB.deleteDatabase(db.name);
+    }
+  } catch { /* best-effort cleanup; never block startup on it */ }
+  try { localStorage.setItem("sdb_purged_v2", "1"); } catch { /* ignore */ }
 }
 
 async function init() {
+  // Returning visitors may still hold the old cached DB/WASM — sweep it once, now.
+  purgeLegacyClientData();
+
   try {
     CFG = await (await fetch("config.json")).json();
     OPTIONS = await (await fetch("filters.json")).json();
@@ -749,21 +683,12 @@ async function init() {
     statusEl.textContent = "Failed to load config.json / filters.json.";
     return;
   }
-  buildFilterUI();
-
-  // Wire navigation and render once up front so the Support page (which needs no
-  // DB) and nav are usable immediately, while the database downloads in the
-  // background. DB-backed views show the "Loading database…" status until ready.
-  window.addEventListener("hashchange", route);
-  route();
-
-  try {
-    const sqlite3 = await sqlite3InitModule();
-    sdb = await loadDatabase(sqlite3);
-  } catch (err) {
-    statusEl.textContent = "Failed to load the database. Check that it is reachable (and CORS-enabled if cross-origin). " + (err.message || err);
+  if (!CFG.apiBase) {
+    statusEl.textContent = "config.json is missing apiBase — the query API URL isn't set.";
     return;
   }
+  buildFilterUI();
+  setupViewTracking();
 
   const onSearchView = () => location.hash.replace(/^#\/?/, "").split("/")[0] === "";
   $("#search-form").addEventListener("submit", (e) => {
@@ -782,6 +707,7 @@ async function init() {
     if (onSearchView() && ($("#q").value.trim() || facetCount() > 0)) doSearch();
   });
   lightbox.addEventListener("click", () => lightbox.classList.remove("show"));
+  window.addEventListener("hashchange", route);
 
   statusEl.textContent = "Search 8,082 indexed scenes by keyword, or browse by episode / character / filter.";
   route();

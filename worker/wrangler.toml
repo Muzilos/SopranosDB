@@ -1,0 +1,16 @@
+# SopranosDB query API Worker. Deploy from this dir: `wrangler deploy`.
+# The VIEW_SECRET salt is NOT here — set it once with:
+#   wrangler secret put VIEW_SECRET
+name = "sopranosdb-api"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+workers_dev = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sopranosdb"
+database_id = "7686403b-2357-4def-b1b6-f58d9853e750"
+
+[vars]
+# CORS + view-endpoint origin gate. Point at the deployed site origin.
+ALLOWED_ORIGIN = "https://sopranosdb.pages.dev"
