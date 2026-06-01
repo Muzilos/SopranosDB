@@ -61,7 +61,7 @@ _SCENE_COLS = (
 )
 
 
-def build_site_db(src: Path, dst: Path) -> None:
+def build_site_db(src: Path, dst: Path, view_counts: dict | None = None) -> None:
     """Create a compact, read-only-friendly copy: base tables + FTS5 only,
     no vector table / api_usage / shots / raw_vlm_json, journal_mode=DELETE,
     page_size 1024, VACUUMed."""
@@ -78,6 +78,11 @@ def build_site_db(src: Path, dst: Path) -> None:
         conn.executescript(SCHEMA_PATH.read_text())
         conn.execute("DROP TABLE IF EXISTS shots")
         conn.execute("DROP TABLE IF EXISTS api_usage")
+        # Per-scene engagement counter for the "Popularity" sort. The served DB is
+        # read-only and static, so real view counts are collected out-of-band (the
+        # view-tracking Worker) and merged in here at build time via --view-counts;
+        # absent that, every scene starts at 0 (Popularity then ties to chrono order).
+        conn.execute("ALTER TABLE scenes ADD COLUMN view_count INTEGER NOT NULL DEFAULT 0")
 
         conn.execute("ATTACH DATABASE ? AS src", (str(src),))
         conn.execute("BEGIN")
@@ -89,6 +94,12 @@ def build_site_db(src: Path, dst: Path) -> None:
         conn.execute("INSERT INTO scene_characters SELECT * FROM src.scene_characters")
         conn.execute("INSERT INTO scene_tags SELECT * FROM src.scene_tags")
         conn.execute("INSERT INTO characters SELECT * FROM src.characters")
+        if view_counts:
+            conn.executemany(
+                "UPDATE scenes SET view_count = ? WHERE id = ?",
+                [(int(c), int(sid)) for sid, c in view_counts.items()],
+            )
+            print(f"  view counts: merged into {len(view_counts)} scenes")
         conn.execute("COMMIT")
         conn.execute("DETACH DATABASE src")
 
@@ -162,15 +173,24 @@ def vite_build(out: Path, skip_install: bool) -> None:
     print(f"  front-end: index.html + {len(assets)} bundled assets (app, SQLite worker, .wasm)")
 
 
-def write_config_json(out: Path, db_url: str, keyframe_base: str) -> None:
+def write_config_json(out: Path, db_url: str, keyframe_base: str,
+                      support: list | None = None) -> None:
     """Runtime config the front-end fetches at startup. Keeping the URLs out of
-    the JS bundle means a redeploy can re-point the DB/keyframes without rebuilding."""
+    the JS bundle means a redeploy can re-point the DB/keyframes without rebuilding.
+
+    ``support`` (optional) is a list of donation-method objects; when present it
+    OVERRIDES the front-end's built-in DEFAULT_SUPPORT list, so live donation
+    handles can be changed without a JS rebuild too. Omitted when None/empty, in
+    which case the baked-in defaults (edit them in src/main.js) are used."""
     config = {
         "dbUrl": db_url,
         "keyframeBase": keyframe_base.rstrip("/"),
     }
+    if support:
+        config["support"] = support
     (out / "config.json").write_text(json.dumps(config, indent=2) + "\n")
-    print(f"  config.json: dbUrl={db_url}")
+    extra = f", support={len(support)} method(s)" if support else ""
+    print(f"  config.json: dbUrl={db_url}{extra}")
 
 
 def link_keyframes(out: Path) -> None:
@@ -212,6 +232,12 @@ def main() -> None:
     ap.add_argument("--keyframe-base", default="artifacts",
                     help="base URL for keyframe images (default: local artifacts symlink)")
     ap.add_argument("--top-tags", type=int, default=40, help="how many top activities/topics to expose")
+    ap.add_argument("--support-json", default=None,
+                    help="path to a JSON file (a list of donation-method objects) to embed in "
+                         "config.json as `support`, overriding the front-end's built-in defaults")
+    ap.add_argument("--view-counts", default=None,
+                    help="path to a JSON object mapping scene_id -> view_count, baked into "
+                         "scenes.view_count to power the Popularity sort")
     ap.add_argument("--skip-install", action="store_true",
                     help="skip `npm install` (assume node_modules is current)")
     ap.add_argument("--no-link-keyframes", action="store_true",
@@ -226,10 +252,22 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     print(f"Building static site -> {out}")
 
+    support = None
+    if args.support_json:
+        support = json.loads(Path(args.support_json).read_text())
+        if not isinstance(support, list):
+            raise SystemExit(f"--support-json must contain a JSON list, got {type(support).__name__}")
+
+    view_counts = None
+    if args.view_counts:
+        view_counts = json.loads(Path(args.view_counts).read_text())
+        if not isinstance(view_counts, dict):
+            raise SystemExit("--view-counts must contain a JSON object {scene_id: count}")
+
     vite_build(out, skip_install=args.skip_install)
-    build_site_db(Path(args.source_db), out / "site.db")
+    build_site_db(Path(args.source_db), out / "site.db", view_counts)
     write_filters_json(out / "site.db", out / "filters.json", args.top_tags)
-    write_config_json(out, args.db_url, args.keyframe_base)
+    write_config_json(out, args.db_url, args.keyframe_base, support)
     if not args.no_link_keyframes:
         link_keyframes(out)
     print_deploy_notes(out, args.db_url, args.keyframe_base)

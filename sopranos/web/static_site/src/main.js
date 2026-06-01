@@ -21,6 +21,7 @@ const lightboxImg = $("#lightbox-img");
 
 let sdb = null;      // in-memory sqlite3.oo1.DB
 let OPTIONS = {};    // filters.json
+let LAST_ROWS = [];  // current top-N-by-relevance result set, for instant client re-sort
 
 // ---------- helpers ----------
 
@@ -68,6 +69,50 @@ function q(sql, params = []) {
   return sdb.selectObjects(sql, params);
 }
 
+// ---------- support / donate config ----------
+//
+// The site is fully static — there's no payment backend. Each method either
+// links out to a hosted service (Ko-fi, PayPal, GitHub Sponsors…) or just shows
+// a handle/address to copy and a deep-link into the relevant app (Cash App,
+// Bitcoin/ETH). Nothing here touches a third party until the visitor clicks.
+//
+// >>> TO GO LIVE: replace the REPLACE_ME / empty values below with your real
+// handles. Any method still left as a placeholder (or blank) is automatically
+// hidden, so a half-filled config can never ship a broken button. Delete the
+// methods you don't want; reorder freely (display order follows this list).
+//
+// config.json may also carry a "support" array; if present and non-empty it
+// OVERRIDES this list, so production handles can be re-pointed without a JS
+// rebuild (same convention as dbUrl / keyframeBase).
+const DEFAULT_SUPPORT = [
+  { kind: "cashapp", label: "Cash App", handle: "$IMMUZ" },
+  { kind: "crypto", label: "Bitcoin", symbol: "BTC", scheme: "bitcoin",
+    address: "32VL1vWyAR7GnTYANdg5SpeSYrKjQpFRGU" },
+  // --- More options: fill in a real value (replace REPLACE_ME) to switch any of
+  // these on. Anything left as a placeholder or blank is hidden automatically. ---
+  { kind: "link", label: "Ko-fi", url: "https://ko-fi.com/REPLACE_ME",
+    blurb: "Drop a one-off tip — no fees on Ko-fi, no account needed.", cta: "Tip on Ko-fi" },
+  { kind: "link", label: "PayPal", url: "https://paypal.me/REPLACE_ME",
+    blurb: "Old reliable — one-time or recurring.", cta: "Pay with PayPal" },
+  { kind: "link", label: "GitHub Sponsors", url: "https://github.com/sponsors/REPLACE_ME",
+    blurb: "Back ongoing development with a monthly sponsorship.", cta: "Sponsor on GitHub" },
+  { kind: "link", label: "Buy Me a Coffee", url: "https://www.buymeacoffee.com/REPLACE_ME",
+    blurb: "Caffeinate the next batch of scene tagging.", cta: "Buy a coffee" },
+];
+
+// A method is "live" only when its value is filled in and not still a placeholder.
+const SUPPORT_PLACEHOLDER = /REPLACE_ME/i;
+const supportValue = (m) =>
+  m.kind === "link" ? m.url : m.kind === "cashapp" ? m.handle : m.address;
+function supportIsLive(m) {
+  const v = (supportValue(m) || "").trim();
+  return Boolean(v) && !SUPPORT_PLACEHOLDER.test(v);
+}
+function supportMethods() {
+  const list = Array.isArray(CFG.support) && CFG.support.length ? CFG.support : DEFAULT_SUPPORT;
+  return list.filter(supportIsLive);
+}
+
 // ---------- query building (mirrors search.py:_build_filter_sql) ----------
 
 function buildFacetSql(f) {
@@ -101,7 +146,7 @@ function buildFacetSql(f) {
 
 const SCENE_COLS = `s.id, s.scene_index, s.start_s, s.end_s, s.summary, s.location_name,
   s.location_type, s.time_of_day, s.mood, s.violence_level, s.group_size_total,
-  s.dialogue_highlight, s.transcript_text, s.keyframes_json,
+  s.dialogue_highlight, s.transcript_text, s.keyframes_json, s.view_count,
   e.season, e.episode, e.title`;
 
 async function attachCharacters(rows) {
@@ -117,6 +162,15 @@ async function attachCharacters(rows) {
   for (const r of rows) r.characters = byId[r.id] || [];
 }
 
+// Chronological (air) order — the DB's default ranking when there's no keyword
+// query, and the tiebreak for the client-side secondary sorts.
+const CHRONO = "e.season, e.episode, s.scene_index";
+
+// The DB always returns the top-N by RELEVANCE: bm25 when there's a keyword
+// query, chronological when the box is empty (relevance has nothing to rank by).
+// The user-chosen sort (newest / oldest / popularity) is NOT pushed into SQL —
+// otherwise "newest" would rank the whole corpus by date and ignore the search.
+// Instead we fetch the top-N relevant rows here and reorder them with sortRows().
 async function runSearch(text, f, top) {
   const [where, params] = buildFacetSql(f);
   const match = ftsMatch(text);
@@ -129,18 +183,34 @@ async function runSearch(text, f, top) {
            JOIN scenes s ON s.id = scenes_fts.rowid
            JOIN episodes e ON e.id = s.episode_id
            WHERE scenes_fts MATCH ? AND ${where}
-           ORDER BY bm25_score LIMIT ?`;
+           ORDER BY bm25_score, ${CHRONO} LIMIT ?`;
     args = [match, ...params, top];
   } else {
     sql = `SELECT ${SCENE_COLS}, 0.0 AS bm25_score
            FROM scenes s JOIN episodes e ON e.id = s.episode_id
            WHERE ${where}
-           ORDER BY e.season, e.episode, s.scene_index LIMIT ?`;
+           ORDER BY ${CHRONO} LIMIT ?`;
     args = [...params, top];
   }
   const rows = await q(sql, args);
   await attachCharacters(rows);
   return rows;
+}
+
+// Reorder an already-fetched (top-N-by-relevance) result set on the client, so
+// switching sort is instant and never drops a relevant result for an irrelevant
+// older/newer one. "relevance" keeps the server's bm25 order untouched.
+function sortRows(rows, sort) {
+  const chrono = (a, b) =>
+    a.season - b.season || a.episode - b.episode || a.scene_index - b.scene_index;
+  const out = rows.slice();
+  switch (sort) {
+    case "newest":     out.sort((a, b) => -chrono(a, b)); break;
+    case "oldest":     out.sort(chrono); break;
+    case "popularity": out.sort((a, b) => (b.view_count || 0) - (a.view_count || 0) || chrono(a, b)); break;
+    // "relevance" (default): leave as-is — already in bm25 order from the DB.
+  }
+  return out;
 }
 
 // ---------- rendering ----------
@@ -402,8 +472,10 @@ function facetCount() {
 async function doSearch() {
   const text = $("#q").value.trim();
   const top = Math.max(1, Math.min(parseInt($("#top").value, 10) || 25, 200));
+  const sort = $("#sort").value;
   const f = currentFacets();
   if (!text && facetCount() === 0) {
+    LAST_ROWS = [];
     statusEl.textContent = "Type some keywords, or pick a filter or two.";
     resultsEl.innerHTML = `<div class="empty">Search 8,082 indexed scenes by keyword, or work the filters — by family, neighborhood, or vibe.</div>`;
     return;
@@ -415,8 +487,9 @@ async function doSearch() {
     const t0 = performance.now();
     const rows = await runSearch(text, f, top);
     const ms = Math.round(performance.now() - t0);
+    LAST_ROWS = rows;
     statusEl.textContent = `${rows.length} result${rows.length === 1 ? "" : "s"} in ${ms} ms.`;
-    renderScenes(rows);
+    renderScenes(sortRows(rows, sort));
   } catch (err) {
     statusEl.textContent = `Error: ${err.message || err}`;
   } finally {
@@ -498,16 +571,95 @@ async function viewScene(id) {
   renderScenes(rows, "");
 }
 
+// ---------- support / donate view ----------
+
+function supportCardHtml(m) {
+  const label = `<div class="support-card-label">${esc(m.label)}${
+    m.symbol ? ` <span class="support-sym">${esc(m.symbol)}</span>` : ""}</div>`;
+  const blurb = m.blurb ? `<p class="support-card-blurb">${esc(m.blurb)}</p>` : "";
+
+  if (m.kind === "link") {
+    const cta = m.cta || `Open ${m.label}`;
+    return `<div class="support-card">${label}${blurb}
+      <a class="btn-link" href="${esc(m.url)}" target="_blank" rel="noopener noreferrer">${esc(cta)} ↗</a>
+    </div>`;
+  }
+
+  if (m.kind === "cashapp") {
+    const tag = m.handle.replace(/^\$/, "");
+    const url = `https://cash.app/$${encodeURIComponent(tag)}`;
+    return `<div class="support-card">${label}${blurb}
+      <div class="support-handle">
+        <code>$${esc(tag)}</code>
+        <button type="button" class="copy-btn" data-copy="$${esc(tag)}">Copy</button>
+      </div>
+      <a class="btn-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer">Open in Cash App ↗</a>
+    </div>`;
+  }
+
+  // crypto: show the full address (mono, wraps), copy button, and a wallet URI.
+  const uri = m.scheme ? `${m.scheme}:${m.address}` : m.address;
+  return `<div class="support-card">${label}${blurb}
+    <div class="support-handle support-addr">
+      <code title="${esc(m.address)}">${esc(m.address)}</code>
+      <button type="button" class="copy-btn" data-copy="${esc(m.address)}">Copy</button>
+    </div>
+    <a class="btn-link ghost" href="${esc(uri)}">Open in wallet</a>
+  </div>`;
+}
+
+function viewSupport() {
+  statusEl.textContent = "Support SopranosDB";
+  const methods = supportMethods();
+  const body = methods.length
+    ? `<div class="support-methods">${methods.map(supportCardHtml).join("")}</div>`
+    : `<div class="support-empty">Tip options are being set up — check back soon.</div>`;
+  resultsEl.innerHTML = `
+    <section class="support">
+      <div class="support-hero">
+        <h2>Enjoying the database? Show your appreciation.</h2>
+      </div>
+      ${body}
+    </section>`;
+  bindCopyButtons();
+}
+
+// Copy-to-clipboard for Cash App tags / crypto addresses, with a fallback for
+// insecure contexts (file://, plain http) where navigator.clipboard is absent.
+function bindCopyButtons() {
+  $$(".copy-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const text = btn.dataset.copy || "";
+      let ok = true;
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        try { ok = document.execCommand("copy"); } catch { ok = false; }
+        ta.remove();
+      }
+      const prev = btn.dataset.label || (btn.dataset.label = btn.textContent);
+      btn.textContent = ok ? "Copied!" : "Press ⌘C";
+      btn.classList.add("copied");
+      setTimeout(() => { btn.textContent = prev; btn.classList.remove("copied"); }, 1400);
+    });
+  });
+}
+
 // ---------- router ----------
 
 function setActiveNav(route) {
-  const map = { "": "#/", "episodes": "#/episodes", "characters": "#/characters" };
+  const map = { "": "#/", "episodes": "#/episodes", "characters": "#/characters", "support": "#/support" };
   const target = map[route] || "";
   $$("#nav a").forEach((a) => a.classList.toggle("active", a.getAttribute("href") === target));
 }
 
 async function route() {
-  if (!sdb) return;
   const h = location.hash.replace(/^#\/?/, "");
   const [r, ...rest] = h.split("/");
   const arg = rest.map(decodeURIComponent).join("/");
@@ -515,6 +667,13 @@ async function route() {
   const searchVisible = r === "";
   $("#search-form").style.display = searchVisible ? "" : "none";
   $("#filters").style.display = searchVisible ? "" : "none";
+  // Support/donate needs no database — render it immediately, even while the
+  // DB is still downloading. Every other view queries sdb, so gate those.
+  if (r === "support") {
+    try { viewSupport(); } catch (err) { statusEl.textContent = `Error: ${err.message || err}`; }
+    return;
+  }
+  if (!sdb) return;
   try {
     switch (r) {
       case "": return doSearch();
@@ -522,6 +681,7 @@ async function route() {
       case "episode": return viewEpisode(arg);
       case "characters": return viewCharacters();
       case "character": return viewCharacter(arg);
+      case "support": return viewSupport();
       case "location": return viewLocation(arg);
       case "scene": return viewScene(arg);
       default:
@@ -591,6 +751,12 @@ async function init() {
   }
   buildFilterUI();
 
+  // Wire navigation and render once up front so the Support page (which needs no
+  // DB) and nav are usable immediately, while the database downloads in the
+  // background. DB-backed views show the "Loading database…" status until ready.
+  window.addEventListener("hashchange", route);
+  route();
+
   try {
     const sqlite3 = await sqlite3InitModule();
     sdb = await loadDatabase(sqlite3);
@@ -599,13 +765,23 @@ async function init() {
     return;
   }
 
+  const onSearchView = () => location.hash.replace(/^#\/?/, "").split("/")[0] === "";
   $("#search-form").addEventListener("submit", (e) => {
     e.preventDefault();
-    if (location.hash.replace(/^#\/?/, "").split("/")[0] === "") doSearch();
+    if (onSearchView()) doSearch();
     else location.hash = "#/";
   });
+  // Changing the sort just reorders the current top-N on the client — no re-query.
+  $("#sort").addEventListener("change", () => {
+    if (!onSearchView()) return;
+    if (LAST_ROWS.length) renderScenes(sortRows(LAST_ROWS, $("#sort").value));
+    else if ($("#q").value.trim() || facetCount() > 0) doSearch();
+  });
+  // Changing the result count changes how many rows we fetch, so re-run the query.
+  $("#top").addEventListener("change", () => {
+    if (onSearchView() && ($("#q").value.trim() || facetCount() > 0)) doSearch();
+  });
   lightbox.addEventListener("click", () => lightbox.classList.remove("show"));
-  window.addEventListener("hashchange", route);
 
   statusEl.textContent = "Search 8,082 indexed scenes by keyword, or browse by episode / character / filter.";
   route();

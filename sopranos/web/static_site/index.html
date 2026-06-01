@@ -15,11 +15,23 @@
     <a href="#/">Search</a>
     <a href="#/episodes">Episodes</a>
     <a href="#/characters">Characters</a>
+    <a class="support-link" href="#/support"><span class="support-heart">♥</span> Support</a>
   </nav>
 
   <form id="search-form">
     <input type="text" id="q" placeholder="keywords — e.g. gabagool, therapy, boat… (or just work the filters)" />
-    <input type="number" id="top" value="25" min="1" max="200" title="Max results" />
+    <select id="top" title="Number of results" aria-label="Number of results">
+      <option value="25">25 results</option>
+      <option value="50">50 results</option>
+      <option value="100">100 results</option>
+      <option value="200">200 results</option>
+    </select>
+    <select id="sort" title="Sort results" aria-label="Sort results">
+      <option value="relevance">Relevance</option>
+      <option value="newest">Newest first</option>
+      <option value="oldest">Oldest first</option>
+      <option value="popularity">Popularity</option>
+    </select>
     <button id="go" type="submit">Search</button>
   </form>
 
