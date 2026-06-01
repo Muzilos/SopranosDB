@@ -26,6 +26,11 @@ function esc(s) {
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
 }
+// Render an FTS snippet safely: escape the transcript text, then restore the
+// literal <mark>…</mark> wrappers the Worker added around the matched words.
+function markSnippet(snip) {
+  return esc(snip).replace(/&lt;mark&gt;/g, "<mark>").replace(/&lt;\/mark&gt;/g, "</mark>");
+}
 const pad = (n) => String(n).padStart(2, "0");
 const epCode = (season, episode) => `S${pad(season)}E${pad(episode)}`;
 const hhmmss = (s) => {
@@ -82,9 +87,8 @@ function pingView(id) {
 // OVERRIDES this list, so production handles can be re-pointed without a JS
 // rebuild (same convention as dbUrl / keyframeBase).
 const DEFAULT_SUPPORT = [
-  { kind: "cashapp", label: "Cash App", handle: "$IMMUZ" },
-  { kind: "crypto", label: "Bitcoin", symbol: "BTC", scheme: "bitcoin",
-    address: "32VL1vWyAR7GnTYANdg5SpeSYrKjQpFRGU" },
+  { kind: "link", label: "Buy Me a Coffee", url: "https://buymeacoffee.com/mozzarell",
+    cta: "Buy a coffee" },
   // --- More options: fill in a real value (replace REPLACE_ME) to switch any of
   // these on. Anything left as a placeholder or blank is hidden automatically. ---
   { kind: "link", label: "Ko-fi", url: "https://ko-fi.com/REPLACE_ME",
@@ -93,8 +97,8 @@ const DEFAULT_SUPPORT = [
     blurb: "Old reliable — one-time or recurring.", cta: "Pay with PayPal" },
   { kind: "link", label: "GitHub Sponsors", url: "https://github.com/sponsors/REPLACE_ME",
     blurb: "Back ongoing development with a monthly sponsorship.", cta: "Sponsor on GitHub" },
-  { kind: "link", label: "Buy Me a Coffee", url: "https://www.buymeacoffee.com/REPLACE_ME",
-    blurb: "Caffeinate the next batch of scene tagging.", cta: "Buy a coffee" },
+  { kind: "cashapp", label: "Cash App", handle: "$REPLACE_ME" },
+  { kind: "crypto", label: "Bitcoin", symbol: "BTC", scheme: "bitcoin", address: "REPLACE_ME" },
 ];
 
 // A method is "live" only when its value is filled in and not still a placeholder.
@@ -140,6 +144,9 @@ function sortRows(rows, sort) {
 
 // ---------- rendering ----------
 
+// Facet values that carry no signal — don't render them as badges.
+const BADGE_SKIP = new Set(["neutral", "none", "unclear"]);
+
 function renderScene(h) {
   const code = epCode(h.season, h.episode);
   const chars = (h.characters || []).map(
@@ -150,10 +157,23 @@ function renderScene(h) {
     ? ` <a href="#/location/${encodeURIComponent(h.location_type)}">(${esc(h.location_type)})</a>` : "";
   const dialogue = h.dialogue_highlight
     ? `<div class="dialogue">${esc(h.dialogue_highlight)}</div>` : "";
+  // When the keyword hit landed in the transcript, the Worker returns a snippet with
+  // the matching words <mark>ed — surface it so a half-remembered line jumps out
+  // instead of hiding inside the collapsed transcript below.
+  const snippet = h.transcript_snip && h.transcript_snip.includes("<mark>")
+    ? `<div class="snippet"><span class="snippet-key">Matched dialogue</span> ${markSnippet(h.transcript_snip)}</div>` : "";
   const transcript = h.transcript_text
     ? `<details><summary>Transcript</summary><pre>${esc(h.transcript_text)}</pre></details>` : "";
   const keyframes = keyframeUrls(h.keyframes_json, h.season, h.episode)
     .map((url) => `<img src="${esc(url)}" data-full="${esc(url)}" loading="lazy" decoding="async" alt="" />`).join("");
+  // Mood / time / violence badges — confirm a match at a glance, and click one to
+  // refine the search by that facet. Skip the "nothing to see here" values so the
+  // row stays signal, not noise.
+  const badges = [["mood", h.mood], ["time_of_day", h.time_of_day], ["violence_level", h.violence_level]]
+    .filter(([, v]) => v && !BADGE_SKIP.has(v))
+    .map(([f, v]) => `<button type="button" class="badge-pill badge-${f}${f === "violence_level" ? " v-" + esc(v) : ""}" data-facet="${f}" data-val="${esc(v)}" title="Refine by ${esc(humanize(v))}">${esc(humanize(v))}</button>`)
+    .join("");
+  const badgeRow = badges ? `<div class="badges">${badges}</div>` : "";
   return `
     <div class="result" data-scene-id="${h.id}">
       <div class="result-head">
@@ -164,8 +184,10 @@ function renderScene(h) {
         <div class="ts">${hhmmss(h.start_s)} – ${hhmmss(h.end_s)}</div>
       </div>
       <div class="meta"><strong>Location:</strong> ${esc(loc)}${locType} &nbsp; <strong>Characters:</strong> ${chars}</div>
+      ${badgeRow}
       <div class="summary">${esc(h.summary || "")}</div>
       ${dialogue}
+      ${snippet}
       <div class="keyframes">${keyframes}</div>
       ${transcript}
     </div>`;
@@ -445,14 +467,232 @@ function facetCount() {
   return n;
 }
 
+// ---------- query language (single-box DSL) ----------
+//
+// Pro users can drive the same facets the chip panel exposes straight from the
+// search box: `char:Tony location:restaurant time:night "exact line"`. We parse the
+// box into the SAME { q, facets } shape the Worker already understands — so the
+// Worker API is unchanged — and merge it with whatever chips are set. The parse is
+// echoed back in the "interpreted as" bar so the grammar is discoverable and the
+// user can see (and trust) how their words were read.
+
+// field alias -> facet key (the keys are exactly currentFacets()'s shape).
+const FIELD_ALIASES = {
+  character: "required_characters", char: "required_characters", who: "required_characters", cast: "required_characters",
+  exclude: "excluded_characters", without: "excluded_characters",
+  location: "location_types", loc: "location_types", place: "location_types", where: "location_types",
+  inside: "location_interior_exterior", inout: "location_interior_exterior", interior: "location_interior_exterior",
+  time: "time_of_day", when: "time_of_day",
+  mood: "mood", vibe: "mood",
+  violence: "violence_level",
+  activity: "activities", doing: "activities",
+  topic: "topics", about: "topics",
+  people: "__group__", size: "__group__", crowd: "__group__",
+};
+// facet key -> filters.json vocab key, for enum / tag resolution.
+const ENUM_VOCAB = {
+  location_types: "location_types", location_interior_exterior: "interior_exterior",
+  time_of_day: "times_of_day", mood: "moods", violence_level: "violence_levels",
+};
+const TAG_VOCAB = { activities: "activities", topics: "topics" };
+const ARRAY_FACETS = new Set(["required_characters", "excluded_characters", "location_types", "activities", "topics"]);
+const FACET_DISPLAY = {
+  required_characters: "Character", excluded_characters: "Without", location_types: "Location",
+  location_interior_exterior: "Inside / outside", time_of_day: "Time", mood: "Mood",
+  violence_level: "Violence", activities: "Activity", topics: "Topic",
+};
+// Everyday words -> the enum value they mean, so `mood:funny` / `time:evening` just work.
+const VALUE_SYNONYMS = {
+  inside: "interior", indoors: "interior", outside: "exterior", outdoors: "exterior", both: "mixed",
+  evening: "night", nighttime: "night", daytime: "day", morning: "day", afternoon: "day", dusk: "dawn_dusk", dawn: "dawn_dusk",
+  funny: "comedic", comedy: "comedic", romantic: "intimate", sad: "melancholy", happy: "warm", scary: "tense",
+  bloody: "severe", brutal: "severe", gory: "severe",
+};
+
+let CHAR_INDEX = null;
+function charIndex() {
+  if (CHAR_INDEX) return CHAR_INDEX;
+  CHAR_INDEX = new Map();
+  for (const e of OPTIONS.roster || []) {
+    CHAR_INDEX.set(e.canonical_name.toLowerCase(), e.canonical_name);
+    for (const a of e.aliases || []) CHAR_INDEX.set(String(a).toLowerCase(), e.canonical_name);
+  }
+  return CHAR_INDEX;
+}
+
+function emptyFacets() {
+  return {
+    required_characters: [], excluded_characters: [], location_types: [], activities: [], topics: [],
+    time_of_day: null, location_interior_exterior: null, mood: null, violence_level: null,
+    min_group_size: null, max_group_size: null,
+  };
+}
+
+function resolveCharacter(raw) {
+  const idx = charIndex();
+  const norm = String(raw).toLowerCase().trim();
+  if (!norm) return null;
+  if (idx.has(norm)) return idx.get(norm);
+  for (const [k, canon] of idx) if (k.includes(norm)) return canon; // loose substring fallback
+  return null;
+}
+
+function resolveEnum(facetKey, raw) {
+  const vocab = OPTIONS[ENUM_VOCAB[facetKey]] || [];
+  let norm = String(raw).toLowerCase().trim();
+  norm = VALUE_SYNONYMS[norm] || norm;
+  if (!norm) return null;
+  for (const v of vocab) if (v.toLowerCase() === norm) return v;
+  for (const v of vocab) if (humanize(v).toLowerCase() === norm) return v;
+  for (const v of vocab) {
+    const lower = v.toLowerCase();
+    if (lower.includes(norm) || lower.split(/_+/).some((w) => w.startsWith(norm))) return v;
+  }
+  return null;
+}
+
+function resolveTag(facetKey, raw) {
+  const vocab = OPTIONS[TAG_VOCAB[facetKey]] || [];
+  const norm = String(raw).toLowerCase().trim().replace(/\s+/g, "_");
+  if (!norm) return null;
+  for (const v of vocab) if (v === norm) return v;
+  for (const v of vocab) if (v.includes(norm) || norm.includes(v)) return v;
+  return norm; // not in the top-N vocab, but the Worker may still match an exact tag
+}
+
+function parseGroup(raw) {
+  const s = String(raw).trim();
+  let m;
+  if ((m = s.match(/^(\d+)\s*-\s*(\d+)$/))) return { min_group_size: +m[1], max_group_size: +m[2] };
+  if ((m = s.match(/^>=\s*(\d+)$/))) return { min_group_size: +m[1] };
+  if ((m = s.match(/^>\s*(\d+)$/))) return { min_group_size: +m[1] + 1 };
+  if ((m = s.match(/^<=\s*(\d+)$/))) return { max_group_size: +m[1] };
+  if ((m = s.match(/^<\s*(\d+)$/))) return { max_group_size: +m[1] - 1 };
+  if ((m = s.match(/^(\d+)\+$/))) return { min_group_size: +m[1] };
+  if ((m = s.match(/^(\d+)$/))) return { min_group_size: +m[1] };
+  return null;
+}
+
+// Split a field value into individual values: handles `(a AND b)`, commas, and
+// "quoted multi-word" values (e.g. character names with spaces).
+function splitValues(raw) {
+  let s = String(raw).trim();
+  if (s.startsWith("(") && s.endsWith(")")) s = s.slice(1, -1);
+  const out = [], cur = [];
+  const flush = () => { if (cur.length) { out.push(cur.join(" ")); cur.length = 0; } };
+  const re = /"([^"]+)"|(,)|([^\s,]+)/g;
+  let m;
+  while ((m = re.exec(s))) {
+    if (m[1] != null) { flush(); out.push(m[1]); }
+    else if (m[2] != null) { flush(); }                 // comma separator
+    else if (/^(AND|OR)$/i.test(m[3])) { flush(); }     // boolean separator (both widen the same facet)
+    else cur.push(m[3]);
+  }
+  flush();
+  return out.filter(Boolean);
+}
+
+function applyField(key, values, facets, interp, warnings) {
+  if (key === "__group__") {
+    for (const v of values) {
+      const g = parseGroup(v);
+      if (!g) { warnings.push(`people: "${v}" — try 2-5, >=4, or a number`); continue; }
+      Object.assign(facets, g);
+      if (g.min_group_size != null) interp.push({ label: "People", text: `≥ ${g.min_group_size}` });
+      if (g.max_group_size != null) interp.push({ label: "People", text: `≤ ${g.max_group_size}` });
+    }
+    return;
+  }
+  for (const raw of values) {
+    let resolved = null;
+    if (key === "required_characters" || key === "excluded_characters") resolved = resolveCharacter(raw);
+    else if (ENUM_VOCAB[key]) resolved = resolveEnum(key, raw);
+    else if (TAG_VOCAB[key]) resolved = resolveTag(key, raw);
+    if (!resolved) { warnings.push(`${FACET_DISPLAY[key] || key}: "${raw}" — no match`); continue; }
+    if (ARRAY_FACETS.has(key)) { if (!facets[key].includes(resolved)) facets[key].push(resolved); }
+    else facets[key] = resolved;
+    interp.push({ label: FACET_DISPLAY[key] || key, text: humanize(resolved) });
+  }
+}
+
+// Parse the search box into { q, facets, interp, warnings }. `q` is the leftover
+// free text (bare words + "phrases"); qualifiers become facets. `usedDsl` is true
+// when any qualifier/phrase was present, which is what gates the interpreted-as bar.
+function parseQuery(input) {
+  const facets = emptyFacets();
+  const interp = [], warnings = [], bareWords = [], phrases = [];
+  let usedDsl = false;
+  // field:value | field:(group) | field:"phrase"  ||  "phrase"  ||  bare word
+  const re = /(-)?([a-zA-Z_]+):(\([^)]*\)|"[^"]*"|[^\s]+)|"([^"]+)"|(\S+)/g;
+  let m;
+  while ((m = re.exec(input))) {
+    const field = m[2] && FIELD_ALIASES[m[2].toLowerCase()];
+    if (field) {
+      usedDsl = true;
+      const key = (m[1] && field === "required_characters") ? "excluded_characters" : field;
+      applyField(key, splitValues(m[3]), facets, interp, warnings);
+    } else if (m[4] != null) {       // standalone "quoted phrase" -> phrase search
+      usedDsl = true;
+      phrases.push(m[4]);
+    } else {                          // bare word (or an unknown `word:` -> treat as text)
+      bareWords.push(m[0]);
+    }
+  }
+  const q = [...bareWords, ...phrases.map((p) => `"${p}"`)].join(" ").trim();
+  if (usedDsl && bareWords.length) interp.unshift({ label: "Keywords", text: bareWords.join(" ") });
+  for (const p of phrases) interp.push({ label: "Exact phrase", text: p });
+  return { q, facets, interp, warnings, usedDsl };
+}
+
+// Union DSL facets onto the chip-panel facets. Arrays merge (deduped); single-value
+// fields keep the chip value when both are set (the panel is the explicit source of truth).
+function mergeFacets(base, dsl) {
+  const out = emptyFacets();
+  for (const k of Object.keys(out)) {
+    if (Array.isArray(out[k])) {
+      const seen = new Set();
+      out[k] = [...(base[k] || []), ...(dsl[k] || [])].filter((v) => v != null && !seen.has(v) && seen.add(v));
+    } else {
+      out[k] = base[k] != null ? base[k] : dsl[k];
+    }
+  }
+  return out;
+}
+
+function countFacets(f) {
+  let n = 0;
+  for (const v of Object.values(f)) {
+    if (Array.isArray(v)) n += v.length ? 1 : 0;
+    else if (v != null) n += 1;
+  }
+  return n;
+}
+
+// The "interpreted as" bar under the box — only shown once the user reaches for the
+// DSL (a qualifier or a phrase) or when something didn't resolve, so plain keyword
+// searches stay clutter-free.
+function renderInterpBar(parsed) {
+  const bar = $("#interp-bar");
+  if (!bar) return;
+  const chips = parsed.interp.map(
+    (i) => `<span class="interp-chip"><span class="interp-key">${esc(i.label)}</span> ${esc(i.text)}</span>`);
+  const warns = parsed.warnings.map((w) => `<span class="interp-chip interp-warn">⚠ ${esc(w)}</span>`);
+  const all = [...chips, ...warns];
+  if ((!parsed.usedDsl && !warns.length) || !all.length) { bar.innerHTML = ""; bar.classList.remove("show"); return; }
+  bar.classList.add("show");
+  bar.innerHTML = `<span class="interp-label">Reading</span>${all.join("")}`;
+}
+
 // ---------- search action ----------
 
 async function doSearch() {
-  const text = $("#q").value.trim();
+  const raw = $("#q").value.trim();
   const top = Math.max(1, Math.min(parseInt($("#top").value, 10) || 25, 200));
   const sort = $("#sort").value;
-  const f = currentFacets();
-  if (!text && facetCount() === 0) {
+  const parsed = parseQuery(raw);
+  const f = mergeFacets(currentFacets(), parsed.facets);
+  renderInterpBar(parsed);
+  if (!parsed.q && countFacets(f) === 0) {
     LAST_ROWS = [];
     statusEl.textContent = "Type some keywords, or pick a filter or two.";
     resultsEl.innerHTML = `<div class="empty">Search 8,082 indexed scenes by keyword, or work the filters — by family, neighborhood, or vibe.</div>`;
@@ -463,7 +703,7 @@ async function doSearch() {
   resultsEl.innerHTML = "";
   try {
     const t0 = performance.now();
-    const rows = await runSearch(text, f, top);
+    const rows = await runSearch(parsed.q, f, top);
     const ms = Math.round(performance.now() - t0);
     LAST_ROWS = rows;
     statusEl.textContent = `${rows.length} result${rows.length === 1 ? "" : "s"} in ${ms} ms.`;
@@ -559,14 +799,16 @@ function supportCardHtml(m) {
     </div>`;
   }
 
-  // crypto: show the full address (mono, wraps), copy button, and a wallet URI.
-  const uri = m.scheme ? `${m.scheme}:${m.address}` : m.address;
+  // crypto: show the full address (mono, wraps) with a copy button. We intentionally
+  // DON'T render a `${scheme}:` wallet link — a raw bitcoin:/ethereum: href throws an
+  // "unknown protocol" error in desktop browsers that have no wallet registered for it.
+  // Copy-and-paste into any wallet works everywhere, so that's the only path we offer.
   return `<div class="support-card">${label}${blurb}
+    <p class="support-card-note">Send ${esc(m.symbol || m.label)} to this address from any wallet:</p>
     <div class="support-handle support-addr">
       <code title="${esc(m.address)}">${esc(m.address)}</code>
       <button type="button" class="copy-btn" data-copy="${esc(m.address)}">Copy</button>
     </div>
-    <a class="btn-link ghost" href="${esc(uri)}">Open in wallet</a>
   </div>`;
 }
 
@@ -579,7 +821,9 @@ function viewSupport() {
   resultsEl.innerHTML = `
     <section class="support">
       <div class="support-hero">
-        <h2>Enjoying the database? Show your appreciation.</h2>
+        <h2>Help support this site</h2>
+        <p class="support-lede">SopranosDB is a free, ad-free fan project. If it's useful to you,
+        a small tip helps cover hosting and keeps the scene tagging going. Thanks for chipping in.</p>
       </div>
       ${body}
     </section>`;
@@ -705,6 +949,15 @@ async function init() {
   // Changing the result count changes how many rows we fetch, so re-run the query.
   $("#top").addEventListener("change", () => {
     if (onSearchView() && ($("#q").value.trim() || facetCount() > 0)) doSearch();
+  });
+  // Click a result's mood/time/violence badge to refine the search by that facet.
+  resultsEl.addEventListener("click", (e) => {
+    const b = e.target.closest(".badge-pill[data-facet]");
+    if (!b) return;
+    FILTERS[b.dataset.facet] = b.dataset.val;   // single-value facets
+    syncFilterUI();
+    if (onSearchView()) doSearch();
+    else location.hash = "#/";                   // jump to search, route() runs doSearch
   });
   lightbox.addEventListener("click", () => lightbox.classList.remove("show"));
   window.addEventListener("hashchange", route);

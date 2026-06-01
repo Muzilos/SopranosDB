@@ -101,6 +101,49 @@ button:disabled { opacity: 0.5; cursor: wait; }
 .chip-x { color: var(--gold); font-size: 14px; line-height: 1; }
 .chip:hover .chip-x { color: var(--accent-hi); }
 
+/* ---------- search tips (advanced-syntax help) ---------- */
+.q-tips { margin-top: 10px; }
+.q-tips > summary {
+  cursor: pointer; color: var(--muted); font-size: 12px; user-select: none;
+  list-style: none; letter-spacing: 0.4px; display: inline-flex; align-items: center; gap: 7px;
+}
+.q-tips > summary::-webkit-details-marker { display: none; }
+.q-tips[open] > summary { color: var(--gold); }
+.q-tips-q {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; border-radius: 999px; border: 1px solid var(--accent);
+  color: var(--gold); font-size: 11px; line-height: 1;
+}
+.q-tips-body {
+  margin-top: 10px; padding: 12px 16px; background: var(--card);
+  border: 1px solid var(--border); border-left: 3px solid var(--gold); border-radius: 4px;
+  color: var(--muted); font-size: 13px;
+}
+.q-tips-body p { margin: 0 0 8px; }
+.q-tips-body ul { margin: 0; padding-left: 18px; }
+.q-tips-body li { margin: 3px 0; }
+.q-tips-body code {
+  background: var(--sunk); color: var(--gold); border-radius: 3px;
+  padding: 1px 5px; font-size: 12px;
+}
+.q-tips-eg { margin-top: 10px !important; color: var(--fg); }
+
+/* ---------- "interpreted as" bar (how the box was parsed) ---------- */
+.interp-bar { display: none; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+.interp-bar.show { display: flex; }
+.interp-label {
+  color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+  margin-right: 2px;
+}
+.interp-chip {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  background: rgba(200,162,76,0.12); color: var(--fg);
+  border: 1px solid var(--border-2); border-radius: 999px;
+  padding: 4px 11px; font-size: 12px; font-family: var(--serif);
+}
+.interp-key { color: var(--gold); font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; }
+.interp-warn { border-color: var(--accent); color: var(--muted); background: rgba(160,24,24,0.10); }
+
 /* ---------- filters panel ---------- */
 .filters {
   margin-top: 14px; padding: 4px 0 0; background: transparent;
@@ -180,6 +223,34 @@ main { padding: 24px; max-width: 1100px; margin: 0 auto; }
   font-style: italic; color: var(--fg); border-left: 3px solid var(--accent);
   padding: 4px 14px; margin: 10px 0; font-size: 14px; font-family: var(--serif);
 }
+/* transcript match snippet — shows the matched line with the hit highlighted */
+.snippet {
+  color: var(--muted); font-size: 13px; margin: 8px 0; padding: 6px 12px;
+  background: var(--sunk); border-radius: 4px;
+}
+.snippet-key {
+  color: var(--gold); font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px;
+  margin-right: 6px;
+}
+.snippet mark, .summary mark {
+  background: rgba(200,162,76,0.30); color: var(--gold-hi); padding: 0 2px; border-radius: 2px;
+}
+/* mood / time / violence badges — click to refine by that facet */
+.badges { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; }
+.badge-pill {
+  background: rgba(200,162,76,0.10); color: var(--fg); border: 1px solid var(--border-2);
+  border-radius: 999px; padding: 2px 9px; font-size: 11px; letter-spacing: 0.3px;
+  cursor: pointer; line-height: 1.5;
+}
+.badge-pill:hover { border-color: var(--gold); color: var(--gold-hi); background: rgba(200,162,76,0.18); }
+/* violence ramps gold -> blood red with severity */
+.badge-violence_level.v-implied,
+.badge-violence_level.v-mild { border-color: var(--border-2); color: var(--muted); }
+.badge-violence_level.v-moderate { border-color: var(--accent); color: var(--gold-hi); }
+.badge-violence_level.v-severe {
+  border-color: var(--accent-hi); color: #f0c0c0; background: rgba(160,24,24,0.18);
+}
+.badge-violence_level.v-severe:hover { background: rgba(197,35,35,0.28); color: #fff; }
 details { margin-top: 8px; }
 details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 details pre {
@@ -256,6 +327,7 @@ nav a.support-link.active {
   border: 1px solid var(--border-2); border-radius: 4px; padding: 1px 5px; vertical-align: middle;
 }
 .support-card-blurb { color: var(--muted); font-size: 13px; margin: 0; flex: 1; }
+.support-card-note { color: var(--muted); font-size: 12px; margin: 0; }
 
 /* handle / address row with inline copy button */
 .support-handle {

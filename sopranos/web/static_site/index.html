@@ -19,7 +19,7 @@
   </nav>
 
   <form id="search-form">
-    <input type="text" id="q" placeholder="keywords — e.g. gabagool, therapy, boat… (or just work the filters)" />
+    <input type="text" id="q" placeholder="keywords — or pro syntax: char:Tony location:restaurant time:night" />
     <select id="top" title="Number of results" aria-label="Number of results">
       <option value="25">25 results</option>
       <option value="50">50 results</option>
@@ -35,6 +35,23 @@
     <button id="go" type="submit">Search</button>
   </form>
 
+  <details class="q-tips" id="q-tips">
+    <summary><span class="q-tips-q">?</span> Search tips — talk like a pro</summary>
+    <div class="q-tips-body">
+      <p>Type plain words to rank by relevance, or get specific with fields:</p>
+      <ul>
+        <li><code>char:Tony</code> — who's in it · combine with <code>char:(Tony AND Christopher)</code></li>
+        <li><code>-char:Carmela</code> — leave 'em out</li>
+        <li><code>location:restaurant</code> — where it goes down · <code>time:night</code></li>
+        <li><code>mood:tense</code> · <code>violence:severe</code> · <code>activity:arguing</code> · <code>topic:loyalty</code></li>
+        <li><code>people:3-6</code> — how many in the scene</li>
+        <li><code>"you're out of order"</code> — an exact line of dialogue</li>
+      </ul>
+      <p class="q-tips-eg">Try: <code>char:Tony location:restaurant time:night sit-down</code></p>
+    </div>
+  </details>
+
+  <div class="interp-bar" id="interp-bar"><!-- "interpreted as" parse, populated by JS --></div>
   <div class="active-bar" id="active-bar"><!-- active filter pills, populated by JS --></div>
 
   <details class="filters" id="filters">

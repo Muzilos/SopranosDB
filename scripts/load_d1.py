@@ -33,7 +33,7 @@ TABLES = [
         "id", "episode_id", "scene_index", "start_s", "end_s", "duration_s", "shot_count",
         "summary", "location_name", "location_type", "location_interior_exterior",
         "time_of_day", "mood", "violence_level", "group_size_total", "background_people_count",
-        "dialogue_highlight", "transcript_text", "keyframes_json", "view_count",
+        "dialogue_highlight", "transcript_text", "keyframes_json", "labels", "view_count",
     ], 20),
     ("scene_characters", ["scene_id", "character_name", "uncertain"], 200),
     ("scene_tags", ["scene_id", "tag_type", "tag_value"], 200),

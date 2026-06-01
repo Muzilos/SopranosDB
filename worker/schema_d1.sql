@@ -39,6 +39,7 @@ CREATE TABLE scenes (
     dialogue_highlight          TEXT,
     transcript_text             TEXT,
     keyframes_json              TEXT,
+    labels                      TEXT,
     view_count                  INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX idx_scenes_episode       ON scenes(episode_id);
@@ -69,7 +70,7 @@ CREATE TABLE characters (
 );
 
 CREATE VIRTUAL TABLE scenes_fts USING fts5(
-    summary, location_name, transcript_text, dialogue_highlight,
+    summary, location_name, transcript_text, dialogue_highlight, labels,
     content='scenes', content_rowid='id',
     tokenize='porter unicode61'
 );

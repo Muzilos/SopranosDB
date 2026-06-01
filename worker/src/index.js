@@ -31,13 +31,29 @@ const STOPWORDS = new Set(
     .split(" "),
 );
 
-// Free text -> FTS5 MATCH expression: drop stopwords, quote each token, OR-join.
-function ftsMatch(text) {
-  let toks = (text || "").match(/[A-Za-z0-9']+/g) || [];
-  const content = toks.filter((t) => !STOPWORDS.has(t.toLowerCase()));
-  toks = content.length ? content : toks;
-  if (!toks.length) return null;
-  return toks.map((t) => `"${t}"`).join(" OR ");
+// Free text -> FTS5 MATCH expression. "quoted segments" become FTS phrase terms;
+// bare words are tokenized and stopword-filtered. Terms are AND-joined by default
+// (precise — every term must hit) or OR-joined for the recall fallback. Every term
+// stays double-quoted, so user input can never inject FTS/SQL operators.
+function ftsMatch(text, { mode = "and" } = {}) {
+  const src = text || "";
+  // Pull out "quoted phrases" first and keep them as multi-word FTS phrase terms.
+  const phrases = [];
+  const phraseRe = /"([^"]+)"/g;
+  let m;
+  while ((m = phraseRe.exec(src))) {
+    const words = m[1].match(/[A-Za-z0-9']+/g) || [];
+    if (words.length) phrases.push(`"${words.join(" ")}"`);
+  }
+  let bare = src.replace(phraseRe, " ").match(/[A-Za-z0-9']+/g) || [];
+  const content = bare.filter((t) => !STOPWORDS.has(t.toLowerCase()));
+  // Drop stopwords; only keep them if they're all we have AND there's no phrase to
+  // carry the query (so a bare "the" still matches, but `"made man" the` doesn't AND
+  // a useless stopword onto the phrase).
+  bare = content.length ? content : (phrases.length ? [] : bare);
+  const terms = [...bare.map((t) => `"${t}"`), ...phrases];
+  if (!terms.length) return null;
+  return terms.join(mode === "or" ? " OR " : " AND ");
 }
 
 // Facet object -> [whereSql, params]. Identical shape to the old buildFacetSql.
@@ -72,6 +88,12 @@ function buildFacetSql(f) {
 
 const CHRONO = "e.season, e.episode, s.scene_index";
 
+// Per-column bm25 weights, in scenes_fts column order:
+//   summary, location_name, transcript_text, dialogue_highlight, labels.
+// Curated/short fields (the memorable dialogue line, the summary) outrank the noisy
+// full transcript and the concatenated labels blob. ORDER BY bm25 ASC = best first.
+const BM25 = "bm25(scenes_fts, 6, 3, 2, 7, 4)";
+
 // ---------- DB helpers ----------
 
 async function rows(env, sql, params = []) {
@@ -103,23 +125,34 @@ async function search(env, url) {
   let f = {};
   try { f = JSON.parse(url.searchParams.get("f") || "{}"); } catch { f = {}; }
   const [where, params] = buildFacetSql(f);
-  const match = ftsMatch(text);
-  let sql, args;
-  if (match) {
-    // top-N by relevance; the client applies the secondary sort (newest/popularity).
-    sql = `SELECT ${SCENE_COLS}, bm25(scenes_fts) AS bm25_score
-           FROM scenes_fts JOIN scenes s ON s.id = scenes_fts.rowid
-           JOIN episodes e ON e.id = s.episode_id
-           WHERE scenes_fts MATCH ? AND ${where}
-           ORDER BY bm25_score, ${CHRONO} LIMIT ?`;
-    args = [match, ...params, top];
-  } else {
-    sql = `SELECT ${SCENE_COLS}, 0.0 AS bm25_score
-           FROM scenes s JOIN episodes e ON e.id = s.episode_id
-           WHERE ${where} ORDER BY ${CHRONO} LIMIT ?`;
-    args = [...params, top];
+  const andMatch = ftsMatch(text, { mode: "and" });
+  if (andMatch) {
+    // Weighted bm25 favours the curated/short fields (dialogue line, summary) over
+    // the noisy transcript and the labels blob; snippet() returns the matched
+    // transcript line with the hit <mark>ed so the client can show *why* it matched.
+    const run = (match) => rows(env,
+      `SELECT ${SCENE_COLS}, ${BM25} AS bm25_score,
+              snippet(scenes_fts, 2, '<mark>', '</mark>', '…', 14) AS transcript_snip
+       FROM scenes_fts JOIN scenes s ON s.id = scenes_fts.rowid
+       JOIN episodes e ON e.id = s.episode_id
+       WHERE scenes_fts MATCH ? AND ${where}
+       ORDER BY bm25_score, ${CHRONO} LIMIT ?`,
+      [match, ...params, top]);
+    // AND is precise; if it returns too few hits, widen once to OR so a half-remembered
+    // query never dead-ends on an empty page. (Single-term queries: AND === OR, skip.)
+    let list = await run(andMatch);
+    if (list.length < Math.min(3, top)) {
+      const orMatch = ftsMatch(text, { mode: "or" });
+      if (orMatch && orMatch !== andMatch) list = await run(orMatch);
+    }
+    return attachCharacters(env, list);
   }
-  return attachCharacters(env, await rows(env, sql, args));
+  const list = await rows(env,
+    `SELECT ${SCENE_COLS}, 0.0 AS bm25_score, '' AS transcript_snip
+     FROM scenes s JOIN episodes e ON e.id = s.episode_id
+     WHERE ${where} ORDER BY ${CHRONO} LIMIT ?`,
+    [...params, top]);
+  return attachCharacters(env, list);
 }
 
 async function episodes(env) {

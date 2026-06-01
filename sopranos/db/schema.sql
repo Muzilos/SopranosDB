@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS scenes (
     dialogue_highlight TEXT,
     transcript_text TEXT,
     keyframes_json TEXT,
+    labels TEXT,                       -- characters + tags concatenated, for FTS keyword search
     raw_vlm_json TEXT,
     UNIQUE(episode_id, scene_index)
 );
@@ -90,22 +91,22 @@ CREATE TABLE IF NOT EXISTS api_usage (
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS scenes_fts USING fts5(
-    summary, location_name, transcript_text, dialogue_highlight,
+    summary, location_name, transcript_text, dialogue_highlight, labels,
     content='scenes', content_rowid='id',
     tokenize='porter unicode61'
 );
 
 CREATE TRIGGER IF NOT EXISTS scenes_ai AFTER INSERT ON scenes BEGIN
-    INSERT INTO scenes_fts(rowid, summary, location_name, transcript_text, dialogue_highlight)
-    VALUES (new.id, new.summary, new.location_name, new.transcript_text, new.dialogue_highlight);
+    INSERT INTO scenes_fts(rowid, summary, location_name, transcript_text, dialogue_highlight, labels)
+    VALUES (new.id, new.summary, new.location_name, new.transcript_text, new.dialogue_highlight, new.labels);
 END;
 CREATE TRIGGER IF NOT EXISTS scenes_ad AFTER DELETE ON scenes BEGIN
-    INSERT INTO scenes_fts(scenes_fts, rowid, summary, location_name, transcript_text, dialogue_highlight)
-    VALUES('delete', old.id, old.summary, old.location_name, old.transcript_text, old.dialogue_highlight);
+    INSERT INTO scenes_fts(scenes_fts, rowid, summary, location_name, transcript_text, dialogue_highlight, labels)
+    VALUES('delete', old.id, old.summary, old.location_name, old.transcript_text, old.dialogue_highlight, old.labels);
 END;
 CREATE TRIGGER IF NOT EXISTS scenes_au AFTER UPDATE ON scenes BEGIN
-    INSERT INTO scenes_fts(scenes_fts, rowid, summary, location_name, transcript_text, dialogue_highlight)
-    VALUES('delete', old.id, old.summary, old.location_name, old.transcript_text, old.dialogue_highlight);
-    INSERT INTO scenes_fts(rowid, summary, location_name, transcript_text, dialogue_highlight)
-    VALUES (new.id, new.summary, new.location_name, new.transcript_text, new.dialogue_highlight);
+    INSERT INTO scenes_fts(scenes_fts, rowid, summary, location_name, transcript_text, dialogue_highlight, labels)
+    VALUES('delete', old.id, old.summary, old.location_name, old.transcript_text, old.dialogue_highlight, old.labels);
+    INSERT INTO scenes_fts(rowid, summary, location_name, transcript_text, dialogue_highlight, labels)
+    VALUES (new.id, new.summary, new.location_name, new.transcript_text, new.dialogue_highlight, new.labels);
 END;

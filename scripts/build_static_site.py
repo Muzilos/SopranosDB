@@ -88,8 +88,23 @@ def build_site_db(src: Path, dst: Path, view_counts: dict | None = None) -> None
         conn.execute("BEGIN")
         conn.execute("INSERT INTO episodes SELECT * FROM src.episodes")
         cols = ", ".join(_SCENE_COLS)
-        conn.execute(  # the scenes_ai trigger populates scenes_fts as we insert
-            f"INSERT INTO scenes ({cols}) SELECT {cols} FROM src.scenes"
+        src_cols = ", ".join(f"s.{c}" for c in _SCENE_COLS)
+        # `labels` concatenates each scene's characters + tag values (activities,
+        # topics, tags, objects) into one text blob, so the FTS index makes the
+        # structured labels keyword-searchable (bare "Paulie"/"espresso" find a scene
+        # even when the word never appears in the summary/transcript). Built from the
+        # source side tables here so the scenes_ai trigger indexes it as we insert.
+        conn.execute(
+            f"INSERT INTO scenes ({cols}, labels) "
+            f"SELECT {src_cols}, "
+            "TRIM("
+            "  COALESCE((SELECT group_concat(character_name, ' ') "
+            "            FROM src.scene_characters sc WHERE sc.scene_id = s.id), '')"
+            "  || ' ' || "
+            "  COALESCE((SELECT group_concat(tag_value, ' ') "
+            "            FROM src.scene_tags st WHERE st.scene_id = s.id), '')"
+            ") "
+            "FROM src.scenes s"
         )
         conn.execute("INSERT INTO scene_characters SELECT * FROM src.scene_characters")
         conn.execute("INSERT INTO scene_tags SELECT * FROM src.scene_tags")
